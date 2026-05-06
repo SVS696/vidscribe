@@ -1,16 +1,29 @@
 You are correcting a local ASR transcript chunk from a video.
 
+CRITICAL FIRST STEP: Before correcting, open EVERY frame path listed below using
+your Read tool. The frames are JPG screenshots from the video at the same
+timestamps as the transcript. They show what is on the speaker's screen and are
+essential context — you MUST use them to:
+- Disambiguate names, terms, and proper nouns visible on screen (UI labels,
+  document titles, lower-thirds, name badges).
+- Resolve ASR mishears against canonical spellings visible in the frames.
+- Identify what the speaker is referring to ("this column", "that report",
+  "here").
+- Add visual context to glossary_delta when a frame reveals a corrected
+  spelling or canonical name (e.g. "ASR heard 'если справочник' but the frame
+  shows 'Excel-справочник'").
+
 Goal:
 - Preserve the speaker's meaning, order, and tone.
 - Fix ASR recognition errors, punctuation, casing, and obvious grammar issues.
-- Use frame paths only as visual context; do not invent facts that are not supported.
+- Cross-reference EVERY frame to ground corrections in what's actually shown.
 - Keep speaker names consistent with the supplied speaker map.
 - Return only valid JSON matching the schema below.
 
 Transcript chunk:
 {{ transcript }}
 
-Frame paths:
+Frame paths (open ALL of these with Read tool before answering):
 {% for frame_path in frame_paths %}
 - {{ frame_path }}
 {% else %}
