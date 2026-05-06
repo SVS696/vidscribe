@@ -17,6 +17,7 @@ dependencies = [
   "pyannote.audio>=4,<5",
   "torch>=2.9,<2.10",
   "torchaudio>=2.9,<2.10",
+  "soundfile>=0.12",
   "jinja2>=3",
 ]
 

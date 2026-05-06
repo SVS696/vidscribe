@@ -395,6 +395,9 @@ def _load_waveform(audio_path: Path | str) -> dict[str, Any]:
 
 
 def _turns_from_annotation(annotation: Any) -> list[DiarTurn]:
+    # pyannote 4.x возвращает DiarizeOutput; 3.x — Annotation напрямую.
+    if hasattr(annotation, "exclusive_speaker_diarization"):
+        annotation = annotation.exclusive_speaker_diarization
     turns: list[DiarTurn] = []
     for segment, _track, speaker in annotation.itertracks(yield_label=True):
         turns.append(
