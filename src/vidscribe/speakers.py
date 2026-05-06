@@ -27,6 +27,7 @@ def identify(
     manual: str | Sequence[str] | Mapping[str, str] | None = None,
     *,
     cache: Cache | None = None,
+    namespace_key: str | None = None,
     timeout: int = 300,
 ) -> SpeakerMap:
     """Identify diarized speakers with manual overrides, LLM evidence, and fallbacks."""
@@ -41,7 +42,9 @@ def identify(
 
     cache_key = None
     if cache is not None:
-        cache_key = cache.key_for(
+        cache_key = _cache_key(
+            cache,
+            namespace_key,
             "speakers",
             stt=stt,
             frame_paths=[frame.path for frame in frames],
@@ -69,6 +72,13 @@ def identify(
         cache.set("speakers", cache_key, speaker_map)
 
     return speaker_map
+
+
+def _cache_key(cache: Cache, namespace_key: str | None, stage: str, **inputs: Any) -> str:
+    key = cache.key_for(stage, **inputs)
+    if namespace_key is None:
+        return key
+    return f"{namespace_key}/{key}"
 
 
 def _speaker_ids(stt: SttResult) -> list[str]:

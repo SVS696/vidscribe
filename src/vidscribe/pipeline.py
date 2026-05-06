@@ -44,6 +44,7 @@ def correct_chunks(
     speakers: Mapping[str, str],
     cache: Cache | None,
     *,
+    namespace_key: str | None = None,
     timeout: int = 300,
     console: Console | None = None,
 ) -> list[CorrectedChunk]:
@@ -57,7 +58,13 @@ def correct_chunks(
         task_id = progress.add_task("Correcting chunks", total=len(chunks))
         for chunk in chunks:
             glossary_snapshot = dict(glossary)
-            cache_key = _cache_key(cache, chunk, provider, glossary_snapshot)
+            cache_key = _cache_key(
+                cache,
+                chunk,
+                provider,
+                glossary_snapshot,
+                namespace_key=namespace_key,
+            )
             cached = cache.get("corrected", cache_key) if cache and cache_key else None
             if cached is not None:
                 corrected_chunk = CorrectedChunk.model_validate(cached)
@@ -117,16 +124,21 @@ def _cache_key(
     chunk: Chunk,
     provider: Provider,
     glossary_snapshot: Mapping[str, str],
+    *,
+    namespace_key: str | None = None,
 ) -> str | None:
     if cache is None:
         return None
-    return cache.key_for(
+    key = cache.key_for(
         "corrected",
         chunk=chunk,
         provider=provider.__class__.__name__,
         model=getattr(provider, "model", None),
         glossary_snapshot=dict(glossary_snapshot),
     )
+    if namespace_key is None:
+        return key
+    return f"{namespace_key}/{key}"
 
 
 def _chunk_transcript(chunk: Chunk, speakers: Mapping[str, str]) -> str:

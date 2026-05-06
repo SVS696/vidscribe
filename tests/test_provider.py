@@ -124,6 +124,18 @@ def test_codex_provider_reads_output_last_message(mocker) -> None:
     assert run.call_args.kwargs["cwd"].name.startswith("vidscribe-provider-")
 
 
+def test_provider_accepts_non_correction_json_schema(mocker) -> None:
+    mocker.patch(
+        "vidscribe.provider.subprocess.run",
+        side_effect=codex_completed('{"speakers": {"SPEAKER_00": "Alice"}}'),
+    )
+
+    response = CodexCLIProvider().correct("prompt", frame_paths=[], timeout=10)
+
+    assert response.text == ""
+    assert response.raw_json == {"speakers": {"SPEAKER_00": "Alice"}}
+
+
 def test_claude_provider_deduplicates_frame_parent_dirs(mocker) -> None:
     run = mocker.patch(
         "vidscribe.provider.subprocess.run",

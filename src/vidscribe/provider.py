@@ -293,9 +293,7 @@ def _response_text(raw_json: dict[str, Any]) -> str:
         if isinstance(content, str):
             return content
 
-    raise ProviderError(
-        "Provider JSON output must include corrected_text, text, result, or response."
-    )
+    return ""
 
 
 def _cost_estimate(raw_json: dict[str, Any]) -> float | None:

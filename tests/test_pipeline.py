@@ -151,6 +151,23 @@ def test_correct_chunks_caches_each_chunk_with_glossary_snapshot(tmp_path) -> No
     assert second_provider.calls == []
 
 
+def test_correct_chunks_can_namespace_cache_under_video_key(tmp_path) -> None:
+    cache = Cache(tmp_path)
+    provider = FakeProvider([{"corrected_text": "Fixed"}])
+
+    correct_chunks(
+        [chunk(0, 0, 5, "SPEAKER_00", "raw")],
+        provider,
+        {"SPEAKER_00": "Иван"},
+        cache,
+        namespace_key="video-key",
+    )
+
+    corrected_root = tmp_path / "cache" / "video-key"
+    assert corrected_root.exists()
+    assert list(corrected_root.glob("*/corrected/artefact.json"))
+
+
 def test_correct_chunks_accepts_inner_json_from_provider_text() -> None:
     provider = FakeProvider(
         [{"result": '{"corrected_text": "Fixed", "glossary_delta": {}, "notes": ""}'}],

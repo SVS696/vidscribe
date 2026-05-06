@@ -391,6 +391,9 @@ def test_cache_list_and_clear_for_video(tmp_path) -> None:
     video_key = cache.key_for("video", video=video)
     (cache_root / "cache" / video_key / "stt").mkdir(parents=True)
     (cache_root / "cache" / video_key / "frames").mkdir()
+    derived = cache_root / "cache" / video_key / "derived-key" / "corrected"
+    derived.mkdir(parents=True)
+    (derived / "artefact.json").write_text('{"text": "secret"}', encoding="utf-8")
 
     list_result = runner.invoke(
         app,

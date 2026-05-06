@@ -174,8 +174,15 @@ def pipeline_command(
         cli_provider,
         manual=config.speakers,
         cache=cache,
+        namespace_key=video_key,
     )
-    corrected = correct_chunks(chunk_items, cli_provider, speaker_map, cache)
+    corrected = correct_chunks(
+        chunk_items,
+        cli_provider,
+        speaker_map,
+        cache,
+        namespace_key=video_key,
+    )
     transcript = assembler.assemble(corrected, speaker_map)
     output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -263,8 +270,15 @@ def correct_command(
         cli_provider,
         manual=config.speakers,
         cache=cache,
+        namespace_key=video_key,
     )
-    corrected = correct_chunks(chunk_items, cli_provider, speaker_map, cache)
+    corrected = correct_chunks(
+        chunk_items,
+        cli_provider,
+        speaker_map,
+        cache,
+        namespace_key=video_key,
+    )
     transcript = assembler.assemble(corrected, speaker_map)
     output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -443,6 +457,7 @@ def _chunks(
         stt=stt_result,
         frames=frame_items,
     )
+    cache_key = f"{video_key}/{cache_key}"
     cached = cache.get("chunks", cache_key)
     if isinstance(cached, list):
         return [chunker.Chunk.model_validate(item) for item in cached]
