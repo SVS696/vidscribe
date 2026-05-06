@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -164,8 +164,21 @@ def transcribe(
     model: str = "noscribe-precise",
     device: str = "auto",
     language: str = "ru",
+    *,
+    on_progress: Callable[[float, float], None] | None = None,
+    total_duration: float | None = None,
 ) -> AsrResult:
-    """Transcribe audio with faster-whisper and return JSON-friendly output."""
+    """Transcribe audio with faster-whisper and return JSON-friendly output.
+
+    Parameters
+    ----------
+    on_progress:
+        Optional callback ``(current_s, total_s)`` called after each segment.
+        ``total_s`` will be 0 if *total_duration* is not provided.
+    total_duration:
+        Audio duration in seconds.  Used to compute progress percentage when
+        *on_progress* is supplied.
+    """
 
     resolved_device = _resolve_device(device)
     model_path, effective_model = _resolve_model_path(model)
@@ -184,6 +197,8 @@ def transcribe(
         vad_filter=True,
     )
 
+    _total = total_duration or 0.0
+
     segments: list[AsrSegment] = []
     words: list[AsrWord] = []
     for raw_segment in segments_iter:
@@ -197,6 +212,8 @@ def transcribe(
                 words=segment_words,
             )
         )
+        if on_progress is not None:
+            on_progress(float(raw_segment.end), _total)
 
     detected_language = getattr(info, "language", None)
     return AsrResult(
@@ -211,21 +228,35 @@ def diarize(
     audio_path: Path | str,
     assets: AssetPaths | None,
     hf_token: str | None = None,
+    *,
+    progress_hook: Any | None = None,
 ) -> DiarResult:
-    """Run pyannote diarization and return speaker turns."""
+    """Run pyannote diarization and return speaker turns.
+
+    Parameters
+    ----------
+    progress_hook:
+        Optional pyannote ``ProgressHook`` instance.  When supplied it is
+        passed directly to the pipeline call so pyannote drives its own
+        progress reporting.
+    """
 
     pipeline_class = _pyannote_pipeline_class()
+    call_kwargs: dict[str, Any] = {}
+    if progress_hook is not None:
+        call_kwargs["hook"] = progress_hook
+
     if assets is not None:
         with tempfile.TemporaryDirectory(prefix="vidscribe-pyannote-") as temp_dir:
             config_path = _patched_pyannote_config(assets, Path(temp_dir))
             pipeline = pipeline_class.from_pretrained(str(config_path))
-            annotation = pipeline(str(audio_path))
+            annotation = pipeline(str(audio_path), **call_kwargs)
     else:
         pipeline = pipeline_class.from_pretrained(
             "pyannote/speaker-diarization-3.1",
             use_auth_token=hf_token,
         )
-        annotation = pipeline(str(audio_path))
+        annotation = pipeline(str(audio_path), **call_kwargs)
 
     return DiarResult(turns=_turns_from_annotation(annotation))
 
@@ -341,6 +372,24 @@ def _patched_pyannote_config(assets: AssetPaths, temp_dir: Path) -> Path:
     output = temp_dir / "config.yaml"
     output.write_text(text, encoding="utf-8")
     return output
+
+
+
+def _load_waveform(audio_path: Path | str) -> dict[str, Any]:
+    """Load audio as a waveform dict accepted by pyannote pipelines.
+
+    Using soundfile instead of torchaudio avoids the ``AudioDecoder`` import
+    that torchaudio's FFmpeg backend requires (not available on all builds).
+    Returns ``{"waveform": Tensor(channels, frames), "sample_rate": int}``.
+    """
+
+    import soundfile as sf
+    import torch as _torch
+
+    waveform_np, sample_rate = sf.read(str(audio_path), dtype="float32", always_2d=True)
+    # soundfile returns (frames, channels); pyannote expects (channels, frames)
+    waveform = _torch.from_numpy(waveform_np.T).contiguous()
+    return {"waveform": waveform, "sample_rate": sample_rate}
 
 
 def _turns_from_annotation(annotation: Any) -> list[DiarTurn]:

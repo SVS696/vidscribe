@@ -242,6 +242,8 @@ def test_diarize_prefers_local_noscribe_assets(tmp_path, monkeypatch) -> None:
     assert assets is not None
     calls = {}
 
+    fake_waveform = {"waveform": "FAKE_TENSOR", "sample_rate": 16000}
+
     class FakeSegment:
         start = 0.5
         end = 1.5
@@ -260,11 +262,12 @@ def test_diarize_prefers_local_noscribe_assets(tmp_path, monkeypatch) -> None:
             calls["config_text"] = config_text
             return cls()
 
-        def __call__(self, audio_path):
-            calls["audio_path"] = audio_path
+        def __call__(self, audio_input, **kwargs):
+            calls["audio_input"] = audio_input
             return FakeAnnotation()
 
     monkeypatch.setattr(stt, "_pyannote_pipeline_class", lambda: FakePipeline)
+    monkeypatch.setattr(stt, "_load_waveform", lambda path: fake_waveform)
 
     result = stt.diarize(tmp_path / "audio.wav", assets)
 
@@ -272,7 +275,7 @@ def test_diarize_prefers_local_noscribe_assets(tmp_path, monkeypatch) -> None:
     assert str(assets.segmentation_path) in calls["config_text"]
     assert str(assets.embedding_path) in calls["config_text"]
     assert calls["kwargs"] == {}
-    assert calls["audio_path"] == str(tmp_path / "audio.wav")
+    assert calls["audio_input"] == fake_waveform
     assert result == DiarResult(
         turns=[DiarTurn(start=0.5, end=1.5, speaker="SPEAKER_00")]
     )
@@ -282,6 +285,8 @@ def test_diarize_falls_back_to_hugging_face_when_assets_missing(
     tmp_path, monkeypatch
 ) -> None:
     calls = {}
+
+    fake_waveform = {"waveform": "FAKE_TENSOR", "sample_rate": 16000}
 
     class FakeAnnotation:
         def itertracks(self, *, yield_label):
@@ -294,18 +299,19 @@ def test_diarize_falls_back_to_hugging_face_when_assets_missing(
             calls["kwargs"] = kwargs
             return cls()
 
-        def __call__(self, audio_path):
-            calls["audio_path"] = audio_path
+        def __call__(self, audio_input, **kwargs):
+            calls["audio_input"] = audio_input
             return FakeAnnotation()
 
     monkeypatch.setattr(stt, "_pyannote_pipeline_class", lambda: FakePipeline)
+    monkeypatch.setattr(stt, "_load_waveform", lambda path: fake_waveform)
 
     result = stt.diarize(tmp_path / "audio.wav", assets=None, hf_token="hf_test")
 
     assert calls == {
         "model_name": "pyannote/speaker-diarization-3.1",
         "kwargs": {"use_auth_token": "hf_test"},
-        "audio_path": str(tmp_path / "audio.wav"),
+        "audio_input": fake_waveform,
     }
     assert result == DiarResult(turns=[])
 
