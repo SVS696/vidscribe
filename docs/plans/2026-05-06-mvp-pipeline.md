@@ -319,10 +319,10 @@ video.mp4
 
 ### Task 16: Documentation
 
-- [ ] update `README.md` — installation, first-run setup (HF token), provider
+- [x] update `README.md` — installation, first-run setup (HF token), provider
       configuration, troubleshooting (ffmpeg not found, HF accept terms)
-- [ ] document HF cache reuse from noScribe (если применимо после Task 4)
-- [ ] add architecture diagram in `docs/architecture.md` (mermaid)
+- [x] document HF cache reuse from noScribe (если применимо после Task 4)
+- [x] add architecture diagram in `docs/architecture.md` (mermaid)
 
 ## Technical Details
 
