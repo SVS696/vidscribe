@@ -4,7 +4,7 @@ import pytest
 
 from vidscribe.cache import Cache
 from vidscribe.chunker import Chunk
-from vidscribe.pipeline import CorrectionError, correct_chunks
+from vidscribe.pipeline import CorrectionError, ScreenEvent, correct_chunks
 from vidscribe.provider import ProviderResponse
 from vidscribe.stt import SttSegment
 
@@ -427,6 +427,90 @@ def test_mix_mode_glossary_delta_merges_both_passes() -> None:
 
     assert "OpenAI" in result[0].glossary_delta  # from text pass
     assert "GPT-5" in result[0].glossary_delta  # from visual pass
+
+
+def test_screen_events_parsed_from_payload_and_stored_in_corrected_chunk() -> None:
+    """screen_events array in provider payload populates CorrectedChunk.screen_events."""
+    payload = {
+        "corrected_text": "Выделяю строку.",
+        "glossary_delta": {},
+        "notes": "",
+        "screen_events": [
+            {"ts": 12.5, "description": "Switched to 'Data' tab"},
+            {"ts": 15.0, "description": "Selected row 3"},
+        ],
+    }
+    provider = FakeProvider([payload])
+
+    result = correct_chunks(
+        [chunk(0, 10, 20, "SPEAKER_00", "выделяю строку")],
+        provider,
+        {"SPEAKER_00": "Иван"},
+        cache=None,
+    )
+
+    assert len(result[0].screen_events) == 2
+    assert result[0].screen_events[0] == ScreenEvent(ts=12.5, description="Switched to 'Data' tab")
+    assert result[0].screen_events[1] == ScreenEvent(ts=15.0, description="Selected row 3")
+
+
+def test_screen_events_empty_when_absent_from_payload() -> None:
+    """Missing screen_events key → empty list, no error."""
+    payload = {
+        "corrected_text": "Привет.",
+        "glossary_delta": {},
+        "notes": "",
+    }
+    provider = FakeProvider([payload])
+
+    result = correct_chunks(
+        [chunk(0, 0, 5, "SPEAKER_00", "привет")],
+        provider,
+        {"SPEAKER_00": "Иван"},
+        cache=None,
+    )
+
+    assert result[0].screen_events == []
+
+
+def test_screen_context_mode_included_in_cache_key(tmp_path) -> None:
+    """Cache keys differ when screen_context_mode differs."""
+    cache = Cache(tmp_path)
+    chunks_list = [chunk(0, 0, 5, "SPEAKER_00", "raw")]
+
+    off_provider = FakeProvider([{"corrected_text": "Off result", "glossary_delta": {}, "notes": ""}])
+    correct_chunks(chunks_list, off_provider, {"SPEAKER_00": "Иван"}, cache, screen_context_mode="off")
+
+    inline_provider = FakeProvider([{"corrected_text": "Inline result", "glossary_delta": {}, "notes": ""}])
+    result = correct_chunks(
+        chunks_list, inline_provider, {"SPEAKER_00": "Иван"}, cache, screen_context_mode="inline"
+    )
+
+    # inline_provider must have been called (different cache key)
+    assert len(inline_provider.calls) == 1
+    assert result[0].corrected_text == "Inline result"
+
+
+def test_mix_mode_screen_events_from_visual_payload_in_result() -> None:
+    """In mix-mode, screen_events from the visual pass populate CorrectedChunk."""
+    text_provider = FakeProvider([TEXT_PAYLOAD])
+    visual_payload_with_events = dict(VISUAL_PAYLOAD)
+    visual_payload_with_events["screen_events"] = [
+        {"ts": 3.0, "description": "Switched tab"},
+    ]
+    visual_provider = FakeProvider([visual_payload_with_events])
+
+    result = correct_chunks(
+        [chunk(0, 0, 5, "SPEAKER_00", "raw")],
+        text_provider,
+        {"SPEAKER_00": "Иван"},
+        cache=None,
+        visual_provider=visual_provider,
+        screen_context_mode="inline",
+    )
+
+    assert len(result[0].screen_events) == 1
+    assert result[0].screen_events[0].description == "Switched tab"
 
 
 def test_mix_mode_cache_key_differs_from_single_mode(tmp_path) -> None:

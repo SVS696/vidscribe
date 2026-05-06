@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 ChunkStrategy = Literal["speaker", "time", "scene"]
 ProviderName = Literal["claude", "codex", "ollama"]
 CorrectionMode = Literal["single", "mix"]
+ScreenContextMode = Literal["off", "inline", "aside", "footer"]
 CacheStage = Literal[
     "audio",
     "frames",
@@ -46,6 +47,7 @@ class AppConfig(BaseModel):
     text_model: str | None = None
     visual_provider: ProviderName = "claude"
     visual_model: str = "sonnet"
+    screen_context_mode: ScreenContextMode = "off"
 
     @field_validator("provider", "text_provider", "visual_provider", mode="before")
     @classmethod
@@ -68,6 +70,7 @@ ENV_MAPPING = {
     "VIDSCRIBE_PROVIDER": "provider",
     "VIDSCRIBE_MODEL": "model",
     "HF_TOKEN": "hf_token",
+    "VIDSCRIBE_SCREEN_CONTEXT": "screen_context_mode",
 }
 
 

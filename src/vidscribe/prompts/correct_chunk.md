@@ -19,6 +19,13 @@ Goal:
 - Cross-reference EVERY frame to ground corrections in what's actually shown.
 - Keep speaker names consistent with the supplied speaker map.
 - Return only valid JSON matching the schema below.
+{% if enable_screen_context %}
+- ADDITIONAL TASK: describe visual events shown across the frames that are NOT already
+  verbalized in the transcript (screen/tab switches, cell selections, highlighting,
+  mouse-driven scrolls or zooms, application opens/closes, modal dialogs).
+  Return them in `screen_events` array. Each ts should be within the chunk's time window.
+  Skip when frames show nothing notable beyond what speech already conveys.
+{% endif %}
 
 Transcript chunk:
 {{ transcript }}
@@ -49,6 +56,25 @@ Speaker map:
 {% endif %}
 
 JSON schema:
+{% if enable_screen_context %}
+{
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 1.0,
+      "speaker": "SPEAKER_00",
+      "corrected_text": "Corrected text for this speaker turn."
+    }
+  ],
+  "glossary_delta": {
+    "new_or_corrected_term": "short explanation or canonical spelling"
+  },
+  "notes": "Brief uncertainty notes, or an empty string.",
+  "screen_events": [
+    {"ts": 12.3, "description": "Switched from 'Data' to 'Main' tab"}
+  ]
+}
+{% else %}
 {
   "segments": [
     {
@@ -63,10 +89,16 @@ JSON schema:
   },
   "notes": "Brief uncertainty notes, or an empty string."
 }
+{% endif %}
 
 Output rules:
 - Respond with exactly one JSON object and no surrounding markdown.
+{% if enable_screen_context %}
+- The top-level object must contain exactly these keys: segments, glossary_delta, notes, screen_events.
+- screen_events must be an array, even when empty. Each item: {"ts": float, "description": string}.
+{% else %}
 - The top-level object must contain exactly these keys: segments, glossary_delta, notes.
+{% endif %}
 - Preserve turn order and speaker ids. Split output whenever the speaker changes.
 - glossary_delta must be an object, even when empty.
 - corrected_text values must not include timestamps unless they are present in the transcript.

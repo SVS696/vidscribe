@@ -10,6 +10,7 @@ def test_correct_chunk_prompt_renders_json_contract() -> None:
         frame_paths=["/tmp/frame-001.jpg"],
         glossary={"OpenAI": "canonical spelling"},
         speaker_map={"SPEAKER_00": "Иван"},
+        enable_screen_context=False,
     )
 
     assert "SPEAKER_00: привет алиса" in rendered
@@ -41,6 +42,7 @@ def test_render_detects_missing_slots_before_provider_call() -> None:
             transcript="text",
             frame_paths=[],
             glossary={},
+            enable_screen_context=False,
         )
 
 

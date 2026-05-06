@@ -116,7 +116,7 @@ def test_pipeline_command_wires_full_run_with_command_overrides(
     speakers_mock.assert_called_once()
     assert speakers_mock.call_args.kwargs["manual"] == ("Alice",)
     correct_mock.assert_called_once()
-    assemble_mock.assert_called_once_with([corrected_item()], {"SPEAKER_00": "Alice"})
+    assemble_mock.assert_called_once_with([corrected_item()], {"SPEAKER_00": "Alice"}, screen_context_mode="off")
     transcribe_mock.assert_called_once()
 
 
@@ -665,6 +665,75 @@ def test_pipeline_single_mode_does_not_pass_visual_provider(tmp_path, mocker) ->
     assert result.exit_code == 0, result.output
     call_kwargs = correct_mock.call_args.kwargs
     assert call_kwargs.get("visual_provider") is None
+
+
+def test_pipeline_screen_context_flag_is_passed_to_assembler(tmp_path, mocker) -> None:
+    """--screen-context inline is parsed and forwarded to assembler.assemble."""
+    runner = CliRunner()
+    video = video_file(tmp_path)
+
+    mocker.patch(
+        "vidscribe.cli._extract",
+        return_value=(tmp_path / "audio.wav", []),
+    )
+    mocker.patch("vidscribe.cli._transcribe_audio", return_value=stt_result())
+    mocker.patch("vidscribe.cli._chunks", return_value=[chunk_item()])
+    mocker.patch("vidscribe.cli.provider.make", return_value=object())
+    mocker.patch(
+        "vidscribe.cli.speakers.identify",
+        return_value={"SPEAKER_00": "Alice"},
+    )
+    mocker.patch("vidscribe.cli.correct_chunks", return_value=[corrected_item()])
+    assemble_mock = mocker.patch("vidscribe.cli.assembler.assemble", return_value="final")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "pipeline",
+            str(video),
+            "--screen-context",
+            "inline",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = assemble_mock.call_args.kwargs
+    assert call_kwargs.get("screen_context_mode") == "inline"
+
+
+def test_correct_screen_context_flag_is_passed_to_assembler(tmp_path, mocker) -> None:
+    """--screen-context aside works for the correct command."""
+    runner = CliRunner()
+    video = video_file(tmp_path)
+
+    mocker.patch("vidscribe.cli._cached_model", return_value=stt_result())
+    mocker.patch("vidscribe.cli._cached_frames", return_value=[])
+    mocker.patch("vidscribe.cli._chunks", return_value=[chunk_item()])
+    mocker.patch("vidscribe.cli.provider.make", return_value=object())
+    mocker.patch(
+        "vidscribe.cli.speakers.identify",
+        return_value={"SPEAKER_00": "Alice"},
+    )
+    mocker.patch("vidscribe.cli.correct_chunks", return_value=[corrected_item()])
+    assemble_mock = mocker.patch("vidscribe.cli.assembler.assemble", return_value="corrected")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "correct",
+            str(video),
+            "--screen-context",
+            "aside",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = assemble_mock.call_args.kwargs
+    assert call_kwargs.get("screen_context_mode") == "aside"
 
 
 def test_cache_list_and_clear_for_video(tmp_path) -> None:

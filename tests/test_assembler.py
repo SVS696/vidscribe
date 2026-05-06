@@ -1,7 +1,7 @@
 import pytest
 
 from vidscribe.assembler import assemble
-from vidscribe.pipeline import CorrectedChunk, CorrectedSegment
+from vidscribe.pipeline import CorrectedChunk, CorrectedSegment, ScreenEvent
 
 
 def corrected(
@@ -130,3 +130,123 @@ def test_assemble_srt_renders_timestamped_entries_without_merging() -> None:
 def test_assemble_rejects_unknown_format() -> None:
     with pytest.raises(ValueError, match="Unsupported output format"):
         assemble([], {}, fmt="txt")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Screen context tests
+# ---------------------------------------------------------------------------
+
+def _chunk_with_events(
+    idx: int,
+    start: float,
+    end: float,
+    speaker: str,
+    text: str,
+    events: list[tuple[float, str]] | None = None,
+) -> CorrectedChunk:
+    return CorrectedChunk(
+        idx=idx,
+        start=start,
+        end=end,
+        speaker=speaker,
+        corrected_text=text,
+        screen_events=[ScreenEvent(ts=ts, description=desc) for ts, desc in (events or [])],
+    )
+
+
+def test_screen_context_off_produces_no_event_markup() -> None:
+    transcript = assemble(
+        [
+            _chunk_with_events(0, 0, 5, "SPEAKER_00", "Первая реплика.", [(2.5, "Tab switched")]),
+        ],
+        {"SPEAKER_00": "Иван"},
+        screen_context_mode="off",
+    )
+
+    assert "📺" not in transcript
+    assert "scene" not in transcript
+    assert "Сцены" not in transcript
+    assert "Первая реплика." in transcript
+
+
+def test_screen_context_inline_inserts_blockquote_before_reply() -> None:
+    transcript = assemble(
+        [
+            _chunk_with_events(0, 83, 90, "SPEAKER_00", "Показываю таблицу.", [(83.0, "Switched to 'Data' tab")]),
+        ],
+        {"SPEAKER_00": "Иван"},
+        screen_context_mode="inline",
+    )
+
+    assert "> 📺 [00:01:23] Switched to 'Data' tab" in transcript
+    assert "Показываю таблицу." in transcript
+    # blockquote must appear before the reply text
+    blockquote_pos = transcript.index("> 📺")
+    reply_pos = transcript.index("Показываю таблицу.")
+    assert blockquote_pos < reply_pos
+
+
+def test_screen_context_inline_no_events_produces_clean_output() -> None:
+    transcript = assemble(
+        [
+            _chunk_with_events(0, 0, 5, "SPEAKER_00", "Чистая реплика.", []),
+        ],
+        {"SPEAKER_00": "Иван"},
+        screen_context_mode="inline",
+    )
+
+    assert "📺" not in transcript
+    assert "Чистая реплика." in transcript
+
+
+def test_screen_context_aside_creates_scenes_section() -> None:
+    transcript = assemble(
+        [
+            _chunk_with_events(0, 0, 10, "SPEAKER_00", "Первый оратор.", [(5.0, "Opened Excel")]),
+            _chunk_with_events(1, 10, 20, "SPEAKER_01", "Второй оратор.", [(15.0, "Selected row 5")]),
+        ],
+        {"SPEAKER_00": "Иван", "SPEAKER_01": "Алиса"},
+        screen_context_mode="aside",
+    )
+
+    assert "## Сцены" in transcript
+    assert "## Транскрипт" in transcript
+    assert "- [00:00:05] Opened Excel" in transcript
+    assert "- [00:00:15] Selected row 5" in transcript
+    # Scenes section must appear before transcript section
+    scenes_pos = transcript.index("## Сцены")
+    transcript_pos = transcript.index("## Транскрипт")
+    assert scenes_pos < transcript_pos
+    # Both speakers should appear in transcript
+    assert "Иван" in transcript
+    assert "Алиса" in transcript
+
+
+def test_screen_context_aside_no_events_omits_scenes_section() -> None:
+    transcript = assemble(
+        [
+            _chunk_with_events(0, 0, 5, "SPEAKER_00", "Без событий.", []),
+        ],
+        {"SPEAKER_00": "Иван"},
+        screen_context_mode="aside",
+    )
+
+    assert "## Сцены" not in transcript
+    assert "Без событий." in transcript
+
+
+def test_screen_context_footer_appends_event_after_reply() -> None:
+    transcript = assemble(
+        [
+            _chunk_with_events(0, 65, 70, "SPEAKER_00", "Выделяю ячейку.", [(65.0, "Selected cell B3")]),
+        ],
+        {"SPEAKER_00": "Иван"},
+        screen_context_mode="footer",
+    )
+
+    assert "*[scene 00:01:05: Selected cell B3]*" in transcript
+    assert "Выделяю ячейку." in transcript
+    # footer must appear after the reply text
+    reply_pos = transcript.index("Выделяю ячейку.")
+    footer_pos = transcript.index("*[scene")
+    assert reply_pos < footer_pos

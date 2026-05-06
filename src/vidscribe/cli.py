@@ -17,7 +17,7 @@ from rich.console import Console
 
 from vidscribe import assembler, audio, chunker, frames, provider, speakers, stt
 from vidscribe.cache import Cache
-from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, CorrectionMode, load_config
+from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, CorrectionMode, ScreenContextMode, load_config
 from vidscribe.frames import FrameInfo
 from vidscribe.pipeline import correct_chunks
 from vidscribe.progress import PipelineProgress
@@ -186,6 +186,10 @@ def pipeline_command(
         str | None,
         typer.Option("--visual-model", help="Mix-mode: model for visual Pass 2."),
     ] = None,
+    screen_context: Annotated[
+        ScreenContextMode | None,
+        typer.Option("--screen-context", help="Screen context mode: off, inline, aside, or footer."),
+    ] = None,
 ) -> None:
     """Run the full transcription and correction pipeline."""
 
@@ -201,6 +205,7 @@ def pipeline_command(
         text_model=text_model,
         visual_provider=visual_provider,
         visual_model=visual_model,
+        screen_context_mode=screen_context,
     )
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
@@ -227,9 +232,10 @@ def pipeline_command(
             namespace_key=video_key,
             visual_provider=_make_visual_provider(config) if config.correction_mode == "mix" else None,
             pipeline_progress=pp,
+            screen_context_mode=config.screen_context_mode,
         )
         with pp.stage("assembly"):
-            transcript = assembler.assemble(corrected, speaker_map)
+            transcript = assembler.assemble(corrected, speaker_map, screen_context_mode=config.screen_context_mode)
     output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(transcript, encoding="utf-8")
@@ -320,6 +326,10 @@ def correct_command(
         str | None,
         typer.Option("--visual-model", help="Mix-mode: model for visual Pass 2."),
     ] = None,
+    screen_context: Annotated[
+        ScreenContextMode | None,
+        typer.Option("--screen-context", help="Screen context mode: off, inline, aside, or footer."),
+    ] = None,
 ) -> None:
     """Re-run correction from cached STT and frames."""
 
@@ -332,6 +342,7 @@ def correct_command(
         text_model=text_model,
         visual_provider=visual_provider,
         visual_model=visual_model,
+        screen_context_mode=screen_context,
     )
     if no_cache:
         disabled = set(config.no_cache) | _CORRECT_RECOMPUTE_STAGES
@@ -362,9 +373,10 @@ def correct_command(
             namespace_key=video_key,
             visual_provider=_make_visual_provider(config) if config.correction_mode == "mix" else None,
             pipeline_progress=pp,
+            screen_context_mode=config.screen_context_mode,
         )
         with pp.stage("assembly"):
-            transcript = assembler.assemble(corrected, speaker_map)
+            transcript = assembler.assemble(corrected, speaker_map, screen_context_mode=config.screen_context_mode)
     output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(transcript, encoding="utf-8")

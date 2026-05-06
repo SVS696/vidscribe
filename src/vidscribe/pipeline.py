@@ -34,6 +34,13 @@ class CorrectedSegment(BaseModel):
     corrected_text: str
 
 
+class ScreenEvent(BaseModel):
+    """A visual event captured from screen frames during a chunk."""
+
+    ts: float
+    description: str
+
+
 class CorrectedChunk(BaseModel):
     """A corrected transcript chunk with provider metadata."""
 
@@ -51,6 +58,7 @@ class CorrectedChunk(BaseModel):
     cost_estimate: float | None = None
     duration_s: float = 0
     frame_paths: list[Path] = Field(default_factory=list)
+    screen_events: list[ScreenEvent] = Field(default_factory=list)
 
 
 def correct_chunks(
@@ -64,6 +72,7 @@ def correct_chunks(
     console: Console | None = None,
     visual_provider: Provider | None = None,
     pipeline_progress: "PipelineProgress | None" = None,
+    screen_context_mode: str = "off",
 ) -> list[CorrectedChunk]:
     """Correct chunks sequentially while accumulating glossary deltas.
 
@@ -107,6 +116,7 @@ def correct_chunks(
                 glossary_snapshot,
                 namespace_key=namespace_key,
                 visual_provider=visual_provider,
+                screen_context_mode=screen_context_mode,
             )
             cached = cache.get("corrected", cache_key) if cache and cache_key else None
             if cached is not None:
@@ -119,6 +129,7 @@ def correct_chunks(
                     speakers=speakers,
                     glossary=glossary_snapshot,
                     timeout=timeout,
+                    screen_context_mode=screen_context_mode,
                 )
                 if cache is not None and cache_key is not None:
                     cache.set("corrected", cache_key, corrected_chunk)
@@ -129,6 +140,7 @@ def correct_chunks(
                     speakers=speakers,
                     glossary=glossary_snapshot,
                     timeout=timeout,
+                    screen_context_mode=screen_context_mode,
                 )
                 if cache is not None and cache_key is not None:
                     cache.set("corrected", cache_key, corrected_chunk)
@@ -148,6 +160,7 @@ def _correct_chunk_mix(
     speakers: Mapping[str, str],
     glossary: Mapping[str, str],
     timeout: int,
+    screen_context_mode: str = "off",
 ) -> CorrectedChunk:
     """Two-pass mix-mode correction: text-only pass then visual-context pass."""
 
@@ -167,6 +180,7 @@ def _correct_chunk_mix(
     )
 
     # Pass 2: visual correction (receives frames + both transcripts)
+    enable_screen_context = screen_context_mode != "off"
     visual_prompt = render(
         "correct_chunk_visual",
         asr_transcript=_chunk_transcript(chunk, speakers),
@@ -174,6 +188,7 @@ def _correct_chunk_mix(
         frame_paths=[str(path) for path in frame_paths],
         glossary=dict(glossary),
         speaker_map=dict(speakers),
+        enable_screen_context=enable_screen_context,
     )
     visual_response = visual_provider.correct(
         visual_prompt, frame_paths=frame_paths, timeout=timeout
@@ -207,6 +222,7 @@ def _correct_chunk_mix(
         cost_estimate=total_cost,
         duration_s=text_response.duration_s + visual_response.duration_s,
         frame_paths=frame_paths,
+        screen_events=_parse_screen_events(visual_payload),
     )
 
 
@@ -217,14 +233,17 @@ def _correct_chunk(
     speakers: Mapping[str, str],
     glossary: Mapping[str, str],
     timeout: int,
+    screen_context_mode: str = "off",
 ) -> CorrectedChunk:
     frame_paths = [path.resolve() for path in chunk.frame_paths]
+    enable_screen_context = screen_context_mode != "off"
     prompt = render(
         "correct_chunk",
         transcript=_chunk_transcript(chunk, speakers),
         frame_paths=[str(path) for path in frame_paths],
         glossary=dict(glossary),
         speaker_map=dict(speakers),
+        enable_screen_context=enable_screen_context,
     )
     response = provider.correct(prompt, frame_paths=frame_paths, timeout=timeout)
     payload = _correction_payload(response)
@@ -245,6 +264,7 @@ def _correct_chunk(
         cost_estimate=response.cost_estimate,
         duration_s=response.duration_s,
         frame_paths=frame_paths,
+        screen_events=_parse_screen_events(payload),
     )
 
 
@@ -257,6 +277,7 @@ def _cache_key(
     *,
     namespace_key: str | None = None,
     visual_provider: Provider | None = None,
+    screen_context_mode: str = "off",
 ) -> str | None:
     if cache is None:
         return None
@@ -270,6 +291,7 @@ def _cache_key(
         correction_mode="mix" if visual_provider is not None else "single",
         speakers=dict(speakers),
         glossary_snapshot=dict(glossary_snapshot),
+        screen_context_mode=screen_context_mode,
     )
     if namespace_key is None:
         return key
@@ -423,6 +445,25 @@ def _string_dict(value: Any) -> dict[str, str]:
         for key, item in value.items()
         if str(key).strip() and str(item).strip()
     }
+
+
+def _parse_screen_events(payload: Mapping[str, Any]) -> list[ScreenEvent]:
+    """Parse screen_events list from a correction payload, ignoring malformed entries."""
+    raw = payload.get("screen_events")
+    if not isinstance(raw, list):
+        return []
+    events: list[ScreenEvent] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            ts = float(item.get("ts", 0))
+            description = str(item.get("description", "")).strip()
+        except (TypeError, ValueError):
+            continue
+        if description:
+            events.append(ScreenEvent(ts=ts, description=description))
+    return events
 
 
 @contextmanager
