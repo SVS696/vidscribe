@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from vidscribe.progress import PipelineProgress
 
 
 NOSCRIBE_RESOURCES = Path("/Applications/noScribe.app/Contents/Resources")
@@ -167,6 +171,7 @@ def transcribe(
     *,
     on_progress: Callable[[float, float], None] | None = None,
     total_duration: float | None = None,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> AsrResult:
     """Transcribe audio with faster-whisper and return JSON-friendly output.
 
@@ -178,6 +183,9 @@ def transcribe(
     total_duration:
         Audio duration in seconds.  Used to compute progress percentage when
         *on_progress* is supplied.
+    pipeline_progress:
+        Optional :class:`~vidscribe.progress.PipelineProgress` instance.  When
+        supplied a rich progress bar is shown on stderr for the STT stage.
     """
 
     resolved_device = _resolve_device(device)
@@ -197,23 +205,35 @@ def transcribe(
         vad_filter=True,
     )
 
-    _total = total_duration or 0.0
+    # Determine total duration for progress bar: prefer explicit arg, then info
+    _total = total_duration
+    if _total is None:
+        _total = float(getattr(info, "duration", 0) or 0)
+
+    ctx = (
+        pipeline_progress.stage("stt", total=_total or None)
+        if pipeline_progress is not None
+        else _null_stage()
+    )
 
     segments: list[AsrSegment] = []
     words: list[AsrWord] = []
-    for raw_segment in segments_iter:
-        segment_words = [_word_from_raw(raw_word) for raw_word in raw_words(raw_segment)]
-        words.extend(segment_words)
-        segments.append(
-            AsrSegment(
-                start=float(raw_segment.start),
-                end=float(raw_segment.end),
-                text=str(raw_segment.text).strip(),
-                words=segment_words,
+    with ctx as handle:
+        for raw_segment in segments_iter:
+            segment_words = [_word_from_raw(raw_word) for raw_word in raw_words(raw_segment)]
+            words.extend(segment_words)
+            segments.append(
+                AsrSegment(
+                    start=float(raw_segment.start),
+                    end=float(raw_segment.end),
+                    text=str(raw_segment.text).strip(),
+                    words=segment_words,
+                )
             )
-        )
-        if on_progress is not None:
-            on_progress(float(raw_segment.end), _total)
+            end_s = float(raw_segment.end)
+            if on_progress is not None:
+                on_progress(end_s, _total or 0.0)
+            handle.advance_to(end_s)
 
     detected_language = getattr(info, "language", None)
     return AsrResult(
@@ -230,6 +250,7 @@ def diarize(
     hf_token: str | None = None,
     *,
     progress_hook: Any | None = None,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> DiarResult:
     """Run pyannote diarization and return speaker turns.
 
@@ -239,26 +260,48 @@ def diarize(
         Optional pyannote ``ProgressHook`` instance.  When supplied it is
         passed directly to the pipeline call so pyannote drives its own
         progress reporting.
+    pipeline_progress:
+        Optional :class:`~vidscribe.progress.PipelineProgress` instance used to
+        show a spinner for the diarization stage.
     """
 
     pipeline_class = _pyannote_pipeline_class()
     call_kwargs: dict[str, Any] = {}
-    if progress_hook is not None:
-        call_kwargs["hook"] = progress_hook
+
+    # Try to attach a pyannote ProgressHook if the caller didn't supply one
+    # and pipeline_progress is available.
+    _hook_to_use = progress_hook
+    if _hook_to_use is None and pipeline_progress is not None:
+        try:
+            from pyannote.audio.pipelines.utils.hook import ProgressHook
+
+            _hook_to_use = ProgressHook()
+        except Exception:
+            pass
+
+    if _hook_to_use is not None:
+        call_kwargs["hook"] = _hook_to_use
 
     waveform = _load_waveform(audio_path)
 
-    if assets is not None:
-        with tempfile.TemporaryDirectory(prefix="vidscribe-pyannote-") as temp_dir:
-            config_path = _patched_pyannote_config(assets, Path(temp_dir))
-            pipeline = pipeline_class.from_pretrained(str(config_path))
+    ctx = (
+        pipeline_progress.stage("diar")
+        if pipeline_progress is not None
+        else _null_stage()
+    )
+
+    with ctx:
+        if assets is not None:
+            with tempfile.TemporaryDirectory(prefix="vidscribe-pyannote-") as temp_dir:
+                config_path = _patched_pyannote_config(assets, Path(temp_dir))
+                pipeline = pipeline_class.from_pretrained(str(config_path))
+                annotation = pipeline(waveform, **call_kwargs)
+        else:
+            pipeline = pipeline_class.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=hf_token,
+            )
             annotation = pipeline(waveform, **call_kwargs)
-    else:
-        pipeline = pipeline_class.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token,
-        )
-        annotation = pipeline(waveform, **call_kwargs)
 
     return DiarResult(turns=_turns_from_annotation(annotation))
 
@@ -464,3 +507,11 @@ def _segment_from_words(words: list[SttWord], speaker: str | None) -> SttSegment
         speaker=speaker,
         words=words,
     )
+
+
+@contextmanager
+def _null_stage():  # type: ignore[return]
+    """No-op context manager used when no PipelineProgress is provided."""
+    from vidscribe.progress import _StageHandle
+
+    yield _StageHandle(None, None, 0)

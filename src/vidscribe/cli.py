@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
+
+if TYPE_CHECKING:
+    from vidscribe.progress import PipelineProgress
 
 import typer
 from pydantic import ValidationError
@@ -16,6 +20,7 @@ from vidscribe.cache import Cache
 from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, CorrectionMode, load_config
 from vidscribe.frames import FrameInfo
 from vidscribe.pipeline import correct_chunks
+from vidscribe.progress import PipelineProgress
 from vidscribe.stt import SttResult
 
 app = typer.Typer(
@@ -89,6 +94,10 @@ def main(
             help="Comma-separated speaker names, positionally mapped by speaker index.",
         ),
     ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", help="Suppress progress output (for CI/scripts)."),
+    ] = False,
 ) -> None:
     """Run vidscribe commands."""
 
@@ -110,13 +119,19 @@ def main(
     except ValidationError as exc:
         raise typer.BadParameter(_validation_message(exc)) from exc
 
-    ctx.obj = {"config": config}
+    ctx.obj = {"config": config, "quiet": quiet}
 
 
 def config_from_context(ctx: typer.Context) -> AppConfig:
     """Return callback-loaded config for subcommands."""
 
     return ctx.obj["config"]
+
+
+def quiet_from_context(ctx: typer.Context) -> bool:
+    """Return the --quiet flag from the root callback."""
+
+    return bool(ctx.obj.get("quiet", False))
 
 
 @app.command("pipeline")
@@ -189,27 +204,32 @@ def pipeline_command(
     )
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
-    audio_path, frame_items = _extract(video, config, cache, video_key)
-    stt_result = _transcribe_audio(audio_path, config, cache, video_key)
-    chunk_items = _chunks(stt_result, frame_items, config, cache, video_key)
-    cli_provider = _make_provider(config)
-    speaker_map = speakers.identify(
-        stt_result,
-        frame_items,
-        cli_provider,
-        manual=config.speakers,
-        cache=cache,
-        namespace_key=video_key,
-    )
-    corrected = correct_chunks(
-        chunk_items,
-        cli_provider,
-        speaker_map,
-        cache,
-        namespace_key=video_key,
-        visual_provider=_make_visual_provider(config) if config.correction_mode == "mix" else None,
-    )
-    transcript = assembler.assemble(corrected, speaker_map)
+    quiet = quiet_from_context(ctx)
+    with PipelineProgress(quiet=quiet) as pp:
+        audio_path, frame_items = _extract(video, config, cache, video_key, pipeline_progress=pp)
+        stt_result = _transcribe_audio(audio_path, config, cache, video_key, pipeline_progress=pp)
+        chunk_items = _chunks(stt_result, frame_items, config, cache, video_key, pipeline_progress=pp)
+        cli_provider = _make_provider(config)
+        speaker_map = speakers.identify(
+            stt_result,
+            frame_items,
+            cli_provider,
+            manual=config.speakers,
+            cache=cache,
+            namespace_key=video_key,
+            pipeline_progress=pp,
+        )
+        corrected = correct_chunks(
+            chunk_items,
+            cli_provider,
+            speaker_map,
+            cache,
+            namespace_key=video_key,
+            visual_provider=_make_visual_provider(config) if config.correction_mode == "mix" else None,
+            pipeline_progress=pp,
+        )
+        with pp.stage("assembly"):
+            transcript = assembler.assemble(corrected, speaker_map)
     output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(transcript, encoding="utf-8")
@@ -231,7 +251,9 @@ def extract_command(
     config = config_from_context(ctx)
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
-    audio_path, frame_items = _extract(video, config, cache, video_key)
+    quiet = quiet_from_context(ctx)
+    with PipelineProgress(quiet=quiet) as pp:
+        audio_path, frame_items = _extract(video, config, cache, video_key, pipeline_progress=pp)
     console.print(f"audio: {audio_path}")
     console.print(f"frames: {len(frame_items)}")
 
@@ -254,8 +276,10 @@ def transcribe_command(
     config = _command_config(ctx, whisper_model=whisper_model)
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
-    audio_path = _audio(video, cache, video_key)
-    stt_result = _transcribe_audio(audio_path, config, cache, video_key)
+    quiet = quiet_from_context(ctx)
+    with PipelineProgress(quiet=quiet) as pp:
+        audio_path = _audio(video, cache, video_key, pipeline_progress=pp)
+        stt_result = _transcribe_audio(audio_path, config, cache, video_key, pipeline_progress=pp)
     console.print(f"segments: {len(stt_result.segments)}")
 
 
@@ -317,25 +341,30 @@ def correct_command(
     video_key = cache.key_for("video", video=video)
     stt_result = _cached_model(cache, "stt", video_key, SttResult)
     frame_items = _cached_frames(cache, video_key)
-    chunk_items = _chunks(stt_result, frame_items, config, cache, video_key)
-    cli_provider = _make_provider(config)
-    speaker_map = speakers.identify(
-        stt_result,
-        frame_items,
-        cli_provider,
-        manual=config.speakers,
-        cache=cache,
-        namespace_key=video_key,
-    )
-    corrected = correct_chunks(
-        chunk_items,
-        cli_provider,
-        speaker_map,
-        cache,
-        namespace_key=video_key,
-        visual_provider=_make_visual_provider(config) if config.correction_mode == "mix" else None,
-    )
-    transcript = assembler.assemble(corrected, speaker_map)
+    quiet = quiet_from_context(ctx)
+    with PipelineProgress(quiet=quiet) as pp:
+        chunk_items = _chunks(stt_result, frame_items, config, cache, video_key, pipeline_progress=pp)
+        cli_provider = _make_provider(config)
+        speaker_map = speakers.identify(
+            stt_result,
+            frame_items,
+            cli_provider,
+            manual=config.speakers,
+            cache=cache,
+            namespace_key=video_key,
+            pipeline_progress=pp,
+        )
+        corrected = correct_chunks(
+            chunk_items,
+            cli_provider,
+            speaker_map,
+            cache,
+            namespace_key=video_key,
+            visual_provider=_make_visual_provider(config) if config.correction_mode == "mix" else None,
+            pipeline_progress=pp,
+        )
+        with pp.stage("assembly"):
+            transcript = assembler.assemble(corrected, speaker_map)
     output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(transcript, encoding="utf-8")
@@ -445,17 +474,28 @@ def _extract(
     config: AppConfig,
     cache: Cache,
     video_key: str,
+    *,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> tuple[Path, list[FrameInfo]]:
-    return _audio(video, cache, video_key), _frames(video, config, cache, video_key)
+    return (
+        _audio(video, cache, video_key, pipeline_progress=pipeline_progress),
+        _frames(video, config, cache, video_key, pipeline_progress=pipeline_progress),
+    )
 
 
-def _audio(video: Path, cache: Cache, video_key: str) -> Path:
+def _audio(
+    video: Path,
+    cache: Cache,
+    video_key: str,
+    *,
+    pipeline_progress: "PipelineProgress | None" = None,
+) -> Path:
     stage_dir = _stage_dir(cache, video_key, "audio")
     cached = _cached_file(cache, "audio", video_key)
     if cached is not None:
         return cached
     output = stage_dir / "audio.wav"
-    return audio.extract(video, output)
+    return audio.extract(video, output, pipeline_progress=pipeline_progress)
 
 
 def _frames(
@@ -463,6 +503,8 @@ def _frames(
     config: AppConfig,
     cache: Cache,
     video_key: str,
+    *,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> list[FrameInfo]:
     output_dir = _stage_dir(cache, video_key, "frames")
     frames_json = output_dir / "frames.json"
@@ -481,6 +523,7 @@ def _frames(
         video,
         output_dir,
         sample_every=1 / config.frame_rate,
+        pipeline_progress=pipeline_progress,
     )
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return [_absolute_frame_info(frame) for frame in frame_items]
@@ -491,6 +534,8 @@ def _transcribe_audio(
     config: AppConfig,
     cache: Cache,
     video_key: str,
+    *,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> SttResult:
     assets = stt.detect_assets()
     metadata = _stt_metadata(config, assets)
@@ -508,9 +553,21 @@ def _transcribe_audio(
         audio_path,
         model=config.whisper_model,
         language=config.language,
+        pipeline_progress=pipeline_progress,
     )
-    diar = stt.diarize(audio_path, assets, hf_token=config.hf_token)
-    result = stt.merge_asr_diar(asr, diar)
+    diar = stt.diarize(
+        audio_path,
+        assets,
+        hf_token=config.hf_token,
+        pipeline_progress=pipeline_progress,
+    )
+    merge_ctx = (
+        pipeline_progress.stage("merge")
+        if pipeline_progress is not None
+        else _null_pp_stage()
+    )
+    with merge_ctx:
+        result = stt.merge_asr_diar(asr, diar)
     cache.set("asr", video_key, asr)
     cache.set("diar", video_key, diar)
     cache.set("stt", video_key, result)
@@ -524,6 +581,8 @@ def _chunks(
     config: AppConfig,
     cache: Cache,
     video_key: str,
+    *,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> list[chunker.Chunk]:
     cache_key = cache.key_for(
         "chunks",
@@ -536,7 +595,20 @@ def _chunks(
     cached = cache.get("chunks", cache_key)
     if isinstance(cached, list):
         return [chunker.Chunk.model_validate(item) for item in cached]
-    chunk_items = chunker.chunk(stt_result, frame_items, config.chunk_strategy)
+
+    ctx = (
+        pipeline_progress.stage("chunks")
+        if pipeline_progress is not None
+        else _null_pp_stage()
+    )
+    with ctx:
+        chunk_items = chunker.chunk(stt_result, frame_items, config.chunk_strategy)
+    pp_print = (
+        pipeline_progress.print(f"  {len(chunk_items)} chunks")
+        if pipeline_progress is not None
+        else None
+    )
+    _ = pp_print  # suppress unused warning
     cache.set("chunks", cache_key, chunk_items)
     return chunk_items
 
@@ -608,3 +680,9 @@ def _stage_dir(cache: Cache, key: str, stage: str) -> Path:
     path = cache.root / "cache" / key / stage
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+@contextmanager
+def _null_pp_stage():  # type: ignore[return]
+    """No-op context manager used when no PipelineProgress is provided."""
+    yield

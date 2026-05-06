@@ -457,7 +457,7 @@ def test_frames_cache_invalidates_when_frame_rate_changes(tmp_path, mocker) -> N
     video_key = cache.key_for("video", video=video)
     calls = []
 
-    def extract(video_path, output_dir, sample_every):
+    def extract(video_path, output_dir, sample_every, **kwargs):
         calls.append(sample_every)
         frame_path = output_dir / f"frame_{len(calls)}.jpg"
         item = FrameInfo(ts=0, path=frame_path, scene_change=False)
@@ -485,7 +485,7 @@ def test_transcribe_cache_invalidates_when_stt_config_changes(tmp_path, mocker) 
     video_key = "video-key"
     calls = []
 
-    def transcribe(audio, model, language):
+    def transcribe(audio, model, language, **kwargs):
         calls.append((model, language))
         return AsrResult(model=model, language=language, segments=[], words=[])
 
@@ -518,7 +518,7 @@ def test_frames_returns_absolute_paths_from_relative_cache_dir(tmp_path, mocker,
     video_key = cache.key_for("video", video=video)
     monkeypatch.chdir(tmp_path)
 
-    def extract(video_path, output_dir, sample_every):
+    def extract(video_path, output_dir, sample_every, **kwargs):
         frame_path = output_dir / "frame.jpg"
         item = FrameInfo(ts=0, path=frame_path, scene_change=False)
         (output_dir / "frames.json").write_text(

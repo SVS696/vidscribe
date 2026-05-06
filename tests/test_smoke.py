@@ -15,6 +15,7 @@ MODULES = [
     "vidscribe.assembler",
     "vidscribe.cache",
     "vidscribe.prompts",
+    "vidscribe.progress",
 ]
 
 

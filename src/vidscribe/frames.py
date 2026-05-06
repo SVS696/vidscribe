@@ -5,9 +5,14 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from vidscribe.progress import PipelineProgress
 
 
 class FrameExtractionError(RuntimeError):
@@ -33,6 +38,8 @@ def extract(
     out_dir: Path | str,
     scene_threshold: float = 0.3,
     sample_every: float = 10.0,
+    *,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> list[FrameInfo]:
     """Extract scene-change and sampled frames with ffmpeg."""
 
@@ -58,18 +65,21 @@ def extract(
         str(output_pattern),
     ]
 
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-    except FileNotFoundError as exc:
-        raise FrameExtractionError(
-            "ffmpeg was not found. Install ffmpeg and make sure it is on PATH."
-        ) from exc
-    except subprocess.CalledProcessError as exc:
-        details = (exc.stderr or exc.stdout or "").strip()
-        message = f"ffmpeg failed to extract frames from {video}"
-        if details:
-            message = f"{message}: {details}"
-        raise FrameExtractionError(message) from exc
+    ctx = pipeline_progress.stage("frames") if pipeline_progress is not None else _null_stage()
+
+    with ctx:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=True)
+        except FileNotFoundError as exc:
+            raise FrameExtractionError(
+                "ffmpeg was not found. Install ffmpeg and make sure it is on PATH."
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            details = (exc.stderr or exc.stdout or "").strip()
+            message = f"ffmpeg failed to extract frames from {video}"
+            if details:
+                message = f"{message}: {details}"
+            raise FrameExtractionError(message) from exc
 
     frames = _frames_from_ffmpeg_log(
         result.stderr or result.stdout or "",
@@ -78,6 +88,12 @@ def extract(
     )
     _write_frames_json(output_dir / "frames.json", frames)
     return frames
+
+
+@contextmanager
+def _null_stage():  # type: ignore[return]
+    """No-op context manager used when no PipelineProgress is provided."""
+    yield
 
 
 def _frames_from_ffmpeg_log(

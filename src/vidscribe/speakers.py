@@ -5,14 +5,18 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from vidscribe.cache import Cache
 from vidscribe.frames import FrameInfo
 from vidscribe.prompts import render
 from vidscribe.provider import Provider
 from vidscribe.stt import SttResult, SttSegment
+
+if TYPE_CHECKING:
+    from vidscribe.progress import PipelineProgress
 
 
 SpeakerMap = dict[str, str]
@@ -29,6 +33,7 @@ def identify(
     cache: Cache | None = None,
     namespace_key: str | None = None,
     timeout: int = 300,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> SpeakerMap:
     """Identify diarized speakers with manual overrides, LLM evidence, and fallbacks."""
 
@@ -56,22 +61,34 @@ def identify(
         if isinstance(cached, dict):
             return _finalize(speaker_ids, _string_dict(cached))
 
-    selected = _representative_segments(stt, speaker_ids)
-    frame_paths = [path.resolve() for path in _representative_frame_paths(frames, selected)]
-    prompt = render(
-        "identify_speakers",
-        transcript=_transcript_excerpt(selected),
-        speakers=speaker_ids,
-        frame_paths=frame_paths,
+    ctx = (
+        pipeline_progress.stage("speakers")
+        if pipeline_progress is not None
+        else _null_stage()
     )
-    response = provider.correct(prompt, frame_paths=frame_paths, timeout=timeout)
-    provider_map = _provider_speaker_map(response.raw_json, response.text)
-    speaker_map = _finalize(speaker_ids, provider_map | manual_map)
+    with ctx:
+        selected = _representative_segments(stt, speaker_ids)
+        frame_paths = [path.resolve() for path in _representative_frame_paths(frames, selected)]
+        prompt = render(
+            "identify_speakers",
+            transcript=_transcript_excerpt(selected),
+            speakers=speaker_ids,
+            frame_paths=frame_paths,
+        )
+        response = provider.correct(prompt, frame_paths=frame_paths, timeout=timeout)
+        provider_map = _provider_speaker_map(response.raw_json, response.text)
+        speaker_map = _finalize(speaker_ids, provider_map | manual_map)
 
     if cache is not None and cache_key is not None:
         cache.set("speakers", cache_key, speaker_map)
 
     return speaker_map
+
+
+@contextmanager
+def _null_stage():  # type: ignore[return]
+    """No-op context manager used when no PipelineProgress is provided."""
+    yield
 
 
 def _cache_key(cache: Cache, namespace_key: str | None, stage: str, **inputs: Any) -> str:

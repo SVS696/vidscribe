@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 from rich.console import Console
@@ -15,6 +16,9 @@ from vidscribe.cache import Cache
 from vidscribe.chunker import Chunk
 from vidscribe.prompts import render
 from vidscribe.provider import Provider, ProviderResponse
+
+if TYPE_CHECKING:
+    from vidscribe.progress import PipelineProgress
 
 
 class CorrectionError(RuntimeError):
@@ -59,6 +63,7 @@ def correct_chunks(
     timeout: int = 300,
     console: Console | None = None,
     visual_provider: Provider | None = None,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> list[CorrectedChunk]:
     """Correct chunks sequentially while accumulating glossary deltas.
 
@@ -69,11 +74,30 @@ def correct_chunks(
 
     glossary: dict[str, str] = {}
     corrected: list[CorrectedChunk] = []
-    output_console = console or Console()
 
-    with Progress(console=output_console, transient=True) as progress:
-        task_id = progress.add_task("Correcting chunks", total=len(chunks))
-        for chunk in chunks:
+    # Build a description that includes provider info
+    provider_name = provider.__class__.__name__
+    provider_model = getattr(provider, "model", None) or ""
+    base_desc = f"[8/9] Correcting chunks ({provider_name}"
+    if provider_model:
+        base_desc = f"{base_desc}/{provider_model}"
+    base_desc = f"{base_desc})"
+
+    if pipeline_progress is not None:
+        ctx = pipeline_progress.stage("correct", total=len(chunks), description=base_desc)
+    else:
+        # Fallback: use the legacy inline Progress (kept for backwards compat)
+        output_console = console or Console()
+        ctx = _legacy_progress_stage(output_console, len(chunks))
+
+    with ctx as handle:
+        for chunk_idx, chunk in enumerate(chunks):
+            # For mix mode, update description to show current pass info
+            if visual_provider is not None and pipeline_progress is not None:
+                handle.update_description(
+                    f"{base_desc} — chunk {chunk_idx + 1}/{len(chunks)}"
+                )
+
             glossary_snapshot = dict(glossary)
             cache_key = _cache_key(
                 cache,
@@ -111,7 +135,7 @@ def correct_chunks(
 
             glossary.update(corrected_chunk.glossary_delta)
             corrected.append(corrected_chunk)
-            progress.advance(task_id)
+            handle.advance()
 
     return corrected
 
@@ -399,3 +423,26 @@ def _string_dict(value: Any) -> dict[str, str]:
         for key, item in value.items()
         if str(key).strip() and str(item).strip()
     }
+
+
+@contextmanager
+def _legacy_progress_stage(output_console: Console, total: int):  # type: ignore[return]
+    """Backwards-compat fallback: inline Progress when no PipelineProgress."""
+
+    class _LegacyHandle:
+        def __init__(self, progress: Progress, task_id: Any) -> None:
+            self._progress = progress
+            self._task_id = task_id
+
+        def advance(self, delta: float = 1) -> None:
+            self._progress.advance(self._task_id, delta)
+
+        def advance_to(self, completed: float) -> None:
+            pass
+
+        def update_description(self, description: str) -> None:
+            self._progress.update(self._task_id, description=description)
+
+    with Progress(console=output_console, transient=True) as progress:
+        task_id = progress.add_task("Correcting chunks", total=total)
+        yield _LegacyHandle(progress, task_id)
