@@ -272,12 +272,12 @@ video.mp4
 
 ### Task 12: Final assembly
 
-- [ ] implement `assembler.assemble(corrected: list[CorrectedChunk],
+- [x] implement `assembler.assemble(corrected: list[CorrectedChunk],
       speakers: dict, fmt: Literal['md', 'srt'] = 'md') -> str`
-- [ ] markdown: `## [HH:MM:SS] **Имя**\n\nреплика\n\n` с слиянием соседних
+- [x] markdown: `## [HH:MM:SS] **Имя**\n\nреплика\n\n` с слиянием соседних
       реплик одного говорящего
-- [ ] write tests
-- [ ] run tests
+- [x] write tests
+- [x] run tests
 
 ### Task 13: CLI commands
 
