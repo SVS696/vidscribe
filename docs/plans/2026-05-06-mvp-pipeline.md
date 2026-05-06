@@ -118,14 +118,14 @@ video.mp4
 
 ### Task 2: Config layer
 
-- [ ] define `config.AppConfig` (provider, model, chunk_strategy, frame_rate,
+- [x] define `config.AppConfig` (provider, model, chunk_strategy, frame_rate,
       whisper_model='noscribe-precise', language='ru', hf_token, cache_dir)
       with pydantic
-- [ ] support env vars (`VIDSCRIBE_PROVIDER`, `VIDSCRIBE_MODEL`, `HF_TOKEN`)
+- [x] support env vars (`VIDSCRIBE_PROVIDER`, `VIDSCRIBE_MODEL`, `HF_TOKEN`)
       and CLI overrides
-- [ ] support optional `~/.config/vidscribe/config.toml`
-- [ ] write tests for env override + file load + CLI precedence
-- [ ] run tests
+- [x] support optional `~/.config/vidscribe/config.toml`
+- [x] write tests for env override + file load + CLI precedence
+- [x] run tests
 
 ### Task 3: Audio extraction
 
