@@ -7,10 +7,22 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 ChunkStrategy = Literal["speaker", "time", "scene"]
+ProviderName = Literal["claude", "codex", "ollama"]
+CacheStage = Literal[
+    "audio",
+    "frames",
+    "asr",
+    "diar",
+    "stt",
+    "chunks",
+    "speakers",
+    "corrected",
+    "final",
+]
 
 
 class AppConfig(BaseModel):
@@ -18,7 +30,7 @@ class AppConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = "codex"
+    provider: ProviderName = "codex"
     model: str = "gpt-5.5"
     chunk_strategy: ChunkStrategy = "speaker"
     frame_rate: float = Field(default=0.1, gt=0)
@@ -26,8 +38,24 @@ class AppConfig(BaseModel):
     language: str = "ru"
     hf_token: str | None = None
     cache_dir: Path = Path(".vidscribe")
-    no_cache: tuple[str, ...] = ()
+    no_cache: tuple[CacheStage, ...] = ()
     speakers: tuple[str, ...] = ()
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def normalize_provider(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("no_cache", mode="before")
+    @classmethod
+    def normalize_no_cache(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return (value.strip().lower(),)
+        if isinstance(value, (list, tuple)):
+            return tuple(item.strip().lower() if isinstance(item, str) else item for item in value)
+        return value
 
 
 ENV_MAPPING = {

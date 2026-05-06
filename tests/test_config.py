@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from vidscribe.cli import app
@@ -95,6 +97,22 @@ def test_cli_overrides_env_and_file(tmp_path, monkeypatch) -> None:
     assert config.provider == "codex"
     assert config.model == "gpt-5.5"
     assert config.chunk_strategy == "time"
+
+
+def test_rejects_unknown_provider() -> None:
+    with pytest.raises(ValidationError, match="provider"):
+        load_config(
+            config_path=Path("/missing/config.toml"),
+            overrides={"provider": "gemini"},
+        )
+
+
+def test_rejects_unknown_no_cache_stage() -> None:
+    with pytest.raises(ValidationError, match="no_cache"):
+        load_config(
+            config_path=Path("/missing/config.toml"),
+            overrides={"no_cache": ("sttt",)},
+        )
 
 
 def test_cli_callback_accepts_config_overrides() -> None:

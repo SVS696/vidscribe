@@ -111,6 +111,37 @@ def test_pipeline_command_wires_full_run_with_command_overrides(
     transcribe_mock.assert_called_once()
 
 
+def test_pipeline_rejects_unknown_provider_before_expensive_work(tmp_path, mocker) -> None:
+    runner = CliRunner()
+    video = video_file(tmp_path)
+    extract_mock = mocker.patch("vidscribe.cli._extract")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "pipeline",
+            str(video),
+            "--provider",
+            "gemini",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid provider" in result.output
+    extract_mock.assert_not_called()
+
+
+def test_cli_rejects_unknown_no_cache_stage() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["--no-cache", "sttt"])
+
+    assert result.exit_code != 0
+    assert "Invalid no_cache.0" in result.output
+
+
 def test_extract_command_runs_audio_and_frames_only(tmp_path, mocker) -> None:
     runner = CliRunner()
     video = video_file(tmp_path)

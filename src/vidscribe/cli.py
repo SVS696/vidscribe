@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 
 from vidscribe import assembler, audio, chunker, frames, provider, speakers, stt
 from vidscribe.cache import Cache
-from vidscribe.config import AppConfig, ChunkStrategy, load_config
+from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, load_config
 from vidscribe.frames import FrameInfo
 from vidscribe.pipeline import correct_chunks
 from vidscribe.stt import SttResult
@@ -91,8 +92,8 @@ def main(
 ) -> None:
     """Run vidscribe commands."""
 
-    ctx.obj = {
-        "config": load_config(
+    try:
+        config = load_config(
             overrides={
                 "provider": provider,
                 "model": model,
@@ -106,7 +107,10 @@ def main(
                 "speakers": _parse_speakers(speakers) if speakers is not None else None,
             }
         )
-    }
+    except ValidationError as exc:
+        raise typer.BadParameter(_validation_message(exc)) from exc
+
+    ctx.obj = {"config": config}
 
 
 def config_from_context(ctx: typer.Context) -> AppConfig:
@@ -325,11 +329,23 @@ def _command_config(ctx: typer.Context, **overrides: Any) -> AppConfig:
     compact = {key: value for key, value in overrides.items() if value is not None}
     if not compact:
         return config
-    return config.model_copy(update=compact)
+    try:
+        return AppConfig.model_validate(config.model_dump() | compact)
+    except ValidationError as exc:
+        raise typer.BadParameter(_validation_message(exc)) from exc
+
+
+def _validation_message(exc: ValidationError) -> str:
+    errors = exc.errors()
+    if not errors:
+        return str(exc)
+    error = errors[0]
+    field = ".".join(str(part) for part in error.get("loc", ())) or "config"
+    return f"Invalid {field}: {error.get('msg', 'invalid value')}"
 
 
 def _cache(config: AppConfig, *, no_cache: bool = False) -> Cache:
-    disabled = set(config.no_cache)
+    disabled: set[CacheStage] = set(config.no_cache)
     if no_cache:
         disabled.update(_ALL_STAGES)
     return Cache(config.cache_dir, disabled_stages=disabled, console=console)
