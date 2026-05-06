@@ -281,17 +281,17 @@ video.mp4
 
 ### Task 13: CLI commands
 
-- [ ] `vidscribe pipeline VIDEO [--provider X] [--model Y]
+- [x] `vidscribe pipeline VIDEO [--provider X] [--model Y]
       [--whisper-model noscribe-precise|noscribe-fast|large-v3]
       [--chunk-strategy speaker|time|scene] [--speakers "A,B"]
       [--out FILE] [--no-cache]` — full run, default whisper-model =
       `noscribe-precise`
-- [ ] `vidscribe extract VIDEO` — только аудио + кадры (no LLM)
-- [ ] `vidscribe transcribe VIDEO` — STT only
-- [ ] `vidscribe correct VIDEO --provider X` — re-run correction with cached STT/frames
-- [ ] `vidscribe cache list|clear [VIDEO]` — управление кэшем
-- [ ] write tests via `typer.testing.CliRunner` + mocked pipeline
-- [ ] run tests
+- [x] `vidscribe extract VIDEO` — только аудио + кадры (no LLM)
+- [x] `vidscribe transcribe VIDEO` — STT only
+- [x] `vidscribe correct VIDEO --provider X` — re-run correction with cached STT/frames
+- [x] `vidscribe cache list|clear [VIDEO]` — управление кэшем
+- [x] write tests via `typer.testing.CliRunner` + mocked pipeline
+- [x] run tests
 
 ### Task 14: Verify acceptance criteria
 
