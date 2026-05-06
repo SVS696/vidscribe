@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vidscribe"
+version = "0.1.0"
+description = "Local video transcription pipeline with CLI-provider correction"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12",
+  "pydantic>=2",
+  "rich>=13",
+  "ffmpeg-python>=0.2",
+  "faster-whisper>=1",
+  "pyannote.audio>=3",
+  "jinja2>=3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-mock>=3",
+  "pytest-cov>=5",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+vidscribe = "vidscribe.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+

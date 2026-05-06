@@ -102,19 +102,19 @@ video.mp4
 
 ### Task 1: Project skeleton
 
-- [ ] create `pyproject.toml` (project metadata, deps: typer, pydantic, rich,
+- [x] create `pyproject.toml` (project metadata, deps: typer, pydantic, rich,
       ffmpeg-python, faster-whisper, pyannote.audio, jinja2; dev: pytest,
       pytest-mock, pytest-cov, ruff)
-- [ ] create `src/vidscribe/__init__.py` and submodules: `cli.py`, `config.py`,
+- [x] create `src/vidscribe/__init__.py` and submodules: `cli.py`, `config.py`,
       `audio.py`, `stt.py`, `frames.py`, `chunker.py`, `speakers.py`,
       `provider.py`, `pipeline.py`, `assembler.py`, `cache.py`,
       `prompts/__init__.py`
-- [ ] create `.gitignore` (`.venv/`, `__pycache__/`, `*.egg-info/`,
+- [x] create `.gitignore` (`.venv/`, `__pycache__/`, `*.egg-info/`,
       `.vidscribe/`, `tests/fixtures/*.mp4` except a tiny one, `.pytest_cache/`)
-- [ ] create `tests/conftest.py` with fixtures path resolver
-- [ ] register console script `vidscribe = vidscribe.cli:app`
-- [ ] write smoke test `tests/test_smoke.py` importing all submodules
-- [ ] run `pip install -e ".[dev]"` and `pytest -q` — must pass
+- [x] create `tests/conftest.py` with fixtures path resolver
+- [x] register console script `vidscribe = vidscribe.cli:app`
+- [x] write smoke test `tests/test_smoke.py` importing all submodules
+- [x] run `pip install -e ".[dev]"` and `pytest -q` — must pass
 
 ### Task 2: Config layer
 
