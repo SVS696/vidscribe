@@ -14,7 +14,6 @@ from vidscribe.stt import (
     AsrWord,
     DiarResult,
     DiarTurn,
-    STTAssetError,
     SttSegment,
     SttWord,
 )
@@ -177,13 +176,26 @@ def test_transcribe_uses_regular_faster_whisper_model_name(tmp_path, monkeypatch
     assert result.language == "en"
 
 
-def test_transcribe_raises_helpful_error_when_noscribe_assets_missing(
+def test_transcribe_falls_back_to_large_v3_when_noscribe_precise_assets_missing(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(stt, "detect_assets", lambda: None)
+    calls = {}
 
-    with pytest.raises(STTAssetError, match="noScribe model assets were not found"):
-        stt.transcribe(tmp_path / "audio.wav", model="noscribe-precise")
+    class FakeWhisperModel:
+        def __init__(self, model_path, *, device, compute_type):
+            calls["model_path"] = model_path
+
+        def transcribe(self, audio_path, **kwargs):
+            return [], SimpleNamespace(language="ru")
+
+    monkeypatch.setattr(stt, "detect_assets", lambda: None)
+    monkeypatch.setattr(stt, "_resolve_device", lambda device: "cpu")
+    monkeypatch.setattr(stt, "_whisper_model_class", lambda: FakeWhisperModel)
+
+    result = stt.transcribe(tmp_path / "audio.wav", model="noscribe-precise")
+
+    assert calls["model_path"] == "large-v3"
+    assert result.model == "large-v3"
 
 
 def test_resolve_device_prefers_cuda_when_available(monkeypatch) -> None:

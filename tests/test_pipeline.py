@@ -89,6 +89,53 @@ def test_correct_chunks_accumulates_glossary_between_provider_calls() -> None:
     assert provider.calls[0][2] == 300
 
 
+def test_correct_chunks_accepts_corrected_segments() -> None:
+    provider = FakeProvider(
+        [
+            {
+                "segments": [
+                    {
+                        "start": 0,
+                        "end": 2,
+                        "speaker": "SPEAKER_00",
+                        "corrected_text": "Иван говорит.",
+                    },
+                    {
+                        "start": 2,
+                        "end": 4,
+                        "speaker": "SPEAKER_01",
+                        "corrected_text": "Алиса отвечает.",
+                    },
+                ],
+                "glossary_delta": {},
+                "notes": "",
+            }
+        ]
+    )
+    item = Chunk(
+        idx=0,
+        start=0,
+        end=4,
+        segments=[
+            segment(0, 2, "SPEAKER_00", "иван говорит"),
+            segment(2, 4, "SPEAKER_01", "алиса отвечает"),
+        ],
+    )
+
+    corrected = correct_chunks(
+        [item],
+        provider,
+        {"SPEAKER_00": "Иван", "SPEAKER_01": "Алиса"},
+        cache=None,
+    )
+
+    assert corrected[0].corrected_text == "Иван говорит.\nАлиса отвечает."
+    assert [segment.speaker for segment in corrected[0].segments] == [
+        "SPEAKER_00",
+        "SPEAKER_01",
+    ]
+
+
 def test_correct_chunks_passes_absolute_frame_paths_to_prompt_and_provider(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     provider = FakeProvider(

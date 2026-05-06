@@ -20,6 +20,15 @@ class CorrectionError(RuntimeError):
     """Raised when a provider response cannot be used as a corrected chunk."""
 
 
+class CorrectedSegment(BaseModel):
+    """A corrected transcript segment preserving speaker attribution."""
+
+    start: float
+    end: float
+    speaker: str | None = None
+    corrected_text: str
+
+
 class CorrectedChunk(BaseModel):
     """A corrected transcript chunk with provider metadata."""
 
@@ -30,6 +39,7 @@ class CorrectedChunk(BaseModel):
     end: float
     speaker: str | None = None
     corrected_text: str
+    segments: list[CorrectedSegment] = Field(default_factory=list)
     glossary_delta: dict[str, str] = Field(default_factory=dict)
     notes: str = ""
     raw_json: dict[str, Any] = Field(default_factory=dict)
@@ -105,12 +115,17 @@ def _correct_chunk(
     )
     response = provider.correct(prompt, frame_paths=frame_paths, timeout=timeout)
     payload = _correction_payload(response)
+    corrected_segments = _corrected_segments(payload, chunk)
+    corrected_text = _joined_corrected_text(corrected_segments) or _string_value(
+        payload, "corrected_text", required=True
+    )
     return CorrectedChunk(
         idx=chunk.idx,
         start=chunk.start,
         end=chunk.end,
         speaker=_chunk_speaker(chunk),
-        corrected_text=_string_value(payload, "corrected_text", required=True),
+        corrected_text=corrected_text,
+        segments=corrected_segments,
         glossary_delta=_string_dict(payload.get("glossary_delta", {})),
         notes=_string_value(payload, "notes", required=False),
         raw_json=response.raw_json,
@@ -172,6 +187,8 @@ def _chunk_speaker(chunk: Chunk) -> str | None:
 def _correction_payload(response: ProviderResponse) -> dict[str, Any]:
     if isinstance(response.raw_json.get("corrected_text"), str):
         return response.raw_json
+    if isinstance(response.raw_json.get("segments"), list):
+        return response.raw_json
 
     text = response.text.strip()
     if text:
@@ -183,6 +200,47 @@ def _correction_payload(response: ProviderResponse) -> dict[str, Any]:
             return parsed
 
     raise CorrectionError("Provider response must include a correction JSON object.")
+
+
+def _corrected_segments(
+    payload: Mapping[str, Any],
+    chunk: Chunk,
+) -> list[CorrectedSegment]:
+    raw_segments = payload.get("segments")
+    if isinstance(raw_segments, list):
+        segments: list[CorrectedSegment] = []
+        for idx, raw_segment in enumerate(raw_segments):
+            if not isinstance(raw_segment, Mapping):
+                raise CorrectionError("Provider response segments must be objects.")
+            source = chunk.segments[min(idx, len(chunk.segments) - 1)]
+            text = _string_value(raw_segment, "corrected_text", required=True)
+            segments.append(
+                CorrectedSegment(
+                    start=_float_value(raw_segment.get("start"), source.start),
+                    end=_float_value(raw_segment.get("end"), source.end),
+                    speaker=_optional_string(raw_segment.get("speaker"), source.speaker),
+                    corrected_text=text,
+                )
+            )
+        return segments
+
+    text = _string_value(payload, "corrected_text", required=True)
+    return [
+        CorrectedSegment(
+            start=chunk.start,
+            end=chunk.end,
+            speaker=_chunk_speaker(chunk),
+            corrected_text=text,
+        )
+    ]
+
+
+def _joined_corrected_text(segments: list[CorrectedSegment]) -> str:
+    return "\n".join(
+        segment.corrected_text.strip()
+        for segment in segments
+        if segment.corrected_text.strip()
+    )
 
 
 def _string_value(
@@ -197,6 +255,19 @@ def _string_value(
     if required:
         raise CorrectionError(f"Provider response is missing string field: {key}")
     return ""
+
+
+def _optional_string(value: Any, fallback: str | None) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return fallback
+
+
+def _float_value(value: Any, fallback: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _string_dict(value: Any) -> dict[str, str]:

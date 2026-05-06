@@ -14,6 +14,7 @@ def test_correct_chunk_prompt_renders_json_contract() -> None:
 
     assert "SPEAKER_00: привет алиса" in rendered
     assert "/tmp/frame-001.jpg" in rendered
+    assert '"segments"' in rendered
     assert '"corrected_text"' in rendered
     assert '"glossary_delta"' in rendered
     assert "Respond with exactly one JSON object" in rendered

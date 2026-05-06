@@ -168,7 +168,7 @@ def transcribe(
     """Transcribe audio with faster-whisper and return JSON-friendly output."""
 
     resolved_device = _resolve_device(device)
-    model_path = _resolve_model_path(model)
+    model_path, effective_model = _resolve_model_path(model)
     compute_type = "int8"
     whisper_model_class = _whisper_model_class()
     whisper_model = whisper_model_class(
@@ -203,7 +203,7 @@ def transcribe(
         segments=segments,
         words=words,
         language=detected_language,
-        model=model,
+        model=effective_model,
     )
 
 
@@ -276,19 +276,17 @@ def _word_from_raw(raw_word: Any) -> AsrWord:
     )
 
 
-def _resolve_model_path(model: str) -> str | Path:
+def _resolve_model_path(model: str) -> tuple[str | Path, str]:
     if model in {"noscribe-precise", "noscribe-fast"}:
         assets = detect_assets()
         if assets is None:
-            raise STTAssetError(
-                "noScribe model assets were not found at "
-                f"{NOSCRIBE_RESOURCES}. Use a faster-whisper model name such as "
-                "'large-v3' or install noScribe."
-            )
+            if model == "noscribe-precise":
+                return "large-v3", "large-v3"
+            return "small", "small"
         if model == "noscribe-precise":
-            return assets.whisper_precise_dir
-        return assets.whisper_fast_dir
-    return model
+            return assets.whisper_precise_dir, model
+        return assets.whisper_fast_dir, model
+    return model, model
 
 
 def _resolve_device(device: str) -> str:

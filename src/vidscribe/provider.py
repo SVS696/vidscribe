@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
+from base64 import b64encode
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -96,7 +100,7 @@ class CodexCLIProvider:
             "--json",
             "--skip-git-repo-check",
             "--sandbox",
-            "read-only",
+            "workspace-write",
             "--ephemeral",
             "--ignore-user-config",
             "--ignore-rules",
@@ -205,10 +209,57 @@ def _run_ollama_provider(
     frame_paths: list[Path],
     timeout: int,
 ) -> ProviderResponse:
-    command = ["ollama", "run", model]
-    command.extend(str(path.resolve()) for path in frame_paths)
-    command.append(prompt)
-    return _run_provider(command, timeout=timeout)
+    return _run_ollama_api(model, prompt, frame_paths, timeout)
+
+
+def _run_ollama_api(
+    model: str,
+    prompt: str,
+    frame_paths: list[Path],
+    timeout: int,
+) -> ProviderResponse:
+    started = time.monotonic()
+    payload: dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "format": "json",
+        "stream": False,
+    }
+    try:
+        if frame_paths:
+            payload["images"] = [
+                b64encode(path.resolve().read_bytes()).decode("ascii")
+                for path in frame_paths
+            ]
+    except FileNotFoundError as exc:
+        raise ProviderError("Ollama image path was not found.") from exc
+
+    request = urllib.request.Request(
+        _ollama_generate_url(),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.URLError as exc:
+        raise ProviderError(f"ollama API request failed: {exc.reason}") from exc
+
+    raw_json = _parse_provider_json(body)
+    return ProviderResponse(
+        text=_response_text(raw_json),
+        raw_json=raw_json,
+        cost_estimate=_cost_estimate(raw_json),
+        duration_s=time.monotonic() - started,
+    )
+
+
+def _ollama_generate_url() -> str:
+    host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+    if "://" not in host:
+        host = f"http://{host}"
+    return f"{host}/api/generate"
 
 
 def _run_provider_in_cwd(

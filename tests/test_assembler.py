@@ -1,7 +1,7 @@
 import pytest
 
 from vidscribe.assembler import assemble
-from vidscribe.pipeline import CorrectedChunk
+from vidscribe.pipeline import CorrectedChunk, CorrectedSegment
 
 
 def corrected(
@@ -51,6 +51,42 @@ def test_assemble_markdown_keeps_non_adjacent_same_speaker_separate() -> None:
 
     assert transcript.count("**Иван**") == 2
     assert transcript.count("## [") == 3
+
+
+def test_assemble_markdown_preserves_corrected_segment_speakers() -> None:
+    transcript = assemble(
+        [
+            CorrectedChunk(
+                idx=0,
+                start=0,
+                end=8,
+                speaker="SPEAKER_00",
+                corrected_text="Иван говорит.\nАлиса отвечает.",
+                segments=[
+                    CorrectedSegment(
+                        start=0,
+                        end=4,
+                        speaker="SPEAKER_00",
+                        corrected_text="Иван говорит.",
+                    ),
+                    CorrectedSegment(
+                        start=4,
+                        end=8,
+                        speaker="SPEAKER_01",
+                        corrected_text="Алиса отвечает.",
+                    ),
+                ],
+            )
+        ],
+        {"SPEAKER_00": "Иван", "SPEAKER_01": "Алиса"},
+    )
+
+    assert transcript == (
+        "## [00:00:00] **Иван**\n\n"
+        "Иван говорит.\n\n"
+        "## [00:00:04] **Алиса**\n\n"
+        "Алиса отвечает.\n"
+    )
 
 
 def test_assemble_markdown_uses_fallback_speaker_names_and_skips_empty_text() -> None:

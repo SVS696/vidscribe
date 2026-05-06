@@ -16,6 +16,16 @@ def test_cache_round_trips_json_artefact(tmp_path) -> None:
     assert cached == {"segments": [{"text": "hello"}]}
 
 
+def test_cache_treats_malformed_json_as_miss(tmp_path) -> None:
+    cache = Cache(tmp_path)
+    key = cache.key_for("stt", video="abc")
+    stage_dir = tmp_path / "cache" / key / "stt"
+    stage_dir.mkdir(parents=True)
+    (stage_dir / "artefact.json").write_text("{not json", encoding="utf-8")
+
+    assert cache.get("stt", key) is None
+
+
 def test_cache_key_is_stable_for_structured_inputs(tmp_path) -> None:
     cache = Cache(tmp_path)
 

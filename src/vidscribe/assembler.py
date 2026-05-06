@@ -30,21 +30,21 @@ def _assemble_markdown(
     speakers: Mapping[str, str],
 ) -> str:
     blocks: list[_MergedBlock] = []
-    for chunk in chunks:
-        text = chunk.corrected_text.strip()
+    for turn in _assembly_turns(chunks):
+        text = turn.corrected_text.strip()
         if not text:
             continue
 
-        speaker = _speaker_name(chunk.speaker, speakers)
+        speaker = _speaker_name(turn.speaker, speakers)
         if blocks and blocks[-1].speaker == speaker:
-            blocks[-1].end = max(blocks[-1].end, chunk.end)
+            blocks[-1].end = max(blocks[-1].end, turn.end)
             blocks[-1].texts.append(text)
             continue
 
         blocks.append(
             _MergedBlock(
-                start=chunk.start,
-                end=chunk.end,
+                start=turn.start,
+                end=turn.end,
                 speaker=speaker,
                 texts=[text],
             )
@@ -68,21 +68,60 @@ def _assemble_srt(
     speakers: Mapping[str, str],
 ) -> str:
     entries: list[str] = []
-    for chunk in chunks:
-        text = chunk.corrected_text.strip()
+    for turn in _assembly_turns(chunks):
+        text = turn.corrected_text.strip()
         if not text:
             continue
-        speaker = _speaker_name(chunk.speaker, speakers)
+        speaker = _speaker_name(turn.speaker, speakers)
         entries.append(
             "\n".join(
                 [
                     str(len(entries) + 1),
-                    f"{_format_srt_time(chunk.start)} --> {_format_srt_time(chunk.end)}",
+                    f"{_format_srt_time(turn.start)} --> {_format_srt_time(turn.end)}",
                     f"{speaker}: {text}",
                 ]
             )
         )
     return "\n\n".join(entries) + ("\n" if entries else "")
+
+
+def _assembly_turns(chunks: list[CorrectedChunk]) -> list["_AssemblyTurn"]:
+    turns: list[_AssemblyTurn] = []
+    for chunk in chunks:
+        if chunk.segments:
+            turns.extend(
+                _AssemblyTurn(
+                    start=segment.start,
+                    end=segment.end,
+                    speaker=segment.speaker,
+                    corrected_text=segment.corrected_text,
+                )
+                for segment in chunk.segments
+            )
+            continue
+        turns.append(
+            _AssemblyTurn(
+                start=chunk.start,
+                end=chunk.end,
+                speaker=chunk.speaker,
+                corrected_text=chunk.corrected_text,
+            )
+        )
+    return sorted(turns, key=lambda turn: (turn.start, turn.end))
+
+
+class _AssemblyTurn:
+    def __init__(
+        self,
+        start: float,
+        end: float,
+        speaker: str | None,
+        corrected_text: str,
+    ) -> None:
+        self.start = start
+        self.end = end
+        self.speaker = speaker
+        self.corrected_text = corrected_text
 
 
 class _MergedBlock:

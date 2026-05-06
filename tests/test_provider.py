@@ -1,4 +1,5 @@
 import subprocess
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import ANY
 
@@ -105,7 +106,7 @@ def test_codex_provider_reads_output_last_message(mocker) -> None:
         "--json",
         "--skip-git-repo-check",
         "--sandbox",
-        "read-only",
+        "workspace-write",
         "--ephemeral",
         "--ignore-user-config",
         "--ignore-rules",
@@ -155,14 +156,14 @@ def test_claude_provider_deduplicates_frame_parent_dirs(mocker) -> None:
     assert command.count(str(first.resolve().parent)) == 1
 
 
-def test_ollama_provider_runs_cli_with_frame_paths(tmp_path, mocker) -> None:
+def test_ollama_provider_uses_generate_api_with_stdin_style_payload(tmp_path, mocker) -> None:
     first = tmp_path / "a.jpg"
     second = tmp_path / "b.jpg"
     first.write_bytes(b"first-image")
     second.write_bytes(b"second-image")
-    run = mocker.patch(
-        "vidscribe.provider.subprocess.run",
-        return_value=completed('{"response": "local"}'),
+    opened = mocker.patch(
+        "vidscribe.provider.urllib.request.urlopen",
+        return_value=BytesIO(b'{"response": "local"}'),
     )
 
     response = OllamaProvider(model="qwen2-vl:7b").correct(
@@ -172,22 +173,12 @@ def test_ollama_provider_runs_cli_with_frame_paths(tmp_path, mocker) -> None:
     )
 
     assert response.text == "local"
-    run.assert_called_once_with(
-        [
-            "ollama",
-            "run",
-            "qwen2-vl:7b",
-            str(first.resolve()),
-            str(second.resolve()),
-            "prompt",
-        ],
-        capture_output=True,
-        text=True,
-        input=None,
-        timeout=60,
-        check=False,
-        cwd=None,
-    )
+    request = opened.call_args.args[0]
+    assert request.full_url == "http://127.0.0.1:11434/api/generate"
+    assert opened.call_args.kwargs["timeout"] == 60
+    assert b'"prompt": "prompt"' in request.data
+    assert b'"format": "json"' in request.data
+    assert b"first-image" not in request.data
 
 
 def test_provider_retries_once_on_transient_nonzero_exit(mocker) -> None:

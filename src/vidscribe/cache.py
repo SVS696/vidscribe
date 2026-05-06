@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import fcntl
 from pydantic import BaseModel
 from rich.console import Console
 
@@ -42,7 +45,11 @@ class Cache:
 
         self.console.log(f"cache hit: {stage}/{key}")
         if artefact_path.suffix == ".json":
-            return json.loads(artefact_path.read_text(encoding="utf-8"))
+            try:
+                return json.loads(artefact_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                self.console.log(f"cache miss: malformed JSON for {stage}/{key}")
+                return None
         if artefact_path.suffix in {".txt", ".md"}:
             return artefact_path.read_text(encoding="utf-8")
         if artefact_path.suffix == ".bin":
@@ -58,35 +65,36 @@ class Cache:
         stage_dir = self._stage_dir(stage, key)
         stage_dir.mkdir(parents=True, exist_ok=True)
 
-        for existing in stage_dir.iterdir():
-            if existing.is_file():
-                existing.unlink()
+        with _exclusive_stage_lock(stage_dir):
+            if isinstance(artefact, Path):
+                destination = stage_dir / artefact.name
+                if artefact.is_file():
+                    _atomic_copy(artefact, destination)
+                else:
+                    _atomic_write_text(destination, str(artefact))
+                _remove_other_files(stage_dir, destination)
+                return destination
 
-        if isinstance(artefact, Path):
-            destination = stage_dir / artefact.name
-            if artefact.is_file():
-                shutil.copy2(artefact, destination)
-            else:
-                destination.write_text(str(artefact), encoding="utf-8")
-            return destination
+            if isinstance(artefact, bytes):
+                path = stage_dir / "artefact.bin"
+                _atomic_write_bytes(path, artefact)
+                _remove_other_files(stage_dir, path)
+                return path
 
-        if isinstance(artefact, bytes):
-            path = stage_dir / "artefact.bin"
-            path.write_bytes(artefact)
+            if isinstance(artefact, str):
+                suffix = ".md" if stage == "final" else ".txt"
+                path = stage_dir / f"artefact{suffix}"
+                _atomic_write_text(path, artefact)
+                _remove_other_files(stage_dir, path)
+                return path
+
+            path = stage_dir / "artefact.json"
+            _atomic_write_text(
+                path,
+                json.dumps(_jsonable(artefact), ensure_ascii=False, indent=2),
+            )
+            _remove_other_files(stage_dir, path)
             return path
-
-        if isinstance(artefact, str):
-            suffix = ".md" if stage == "final" else ".txt"
-            path = stage_dir / f"artefact{suffix}"
-            path.write_text(artefact, encoding="utf-8")
-            return path
-
-        path = stage_dir / "artefact.json"
-        path.write_text(
-            json.dumps(_jsonable(artefact), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return path
 
     def key_for(self, stage: str, **inputs: Any) -> str:
         """Build a deterministic sha256 key from a stage and structured inputs."""
@@ -132,6 +140,45 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_jsonable(item) for item in value]
     return value
+
+
+@contextmanager
+def _exclusive_stage_lock(stage_dir: Path):
+    lock_path = stage_dir / ".lock"
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    _atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with tmp_path.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    tmp_path.replace(path)
+
+
+def _atomic_copy(source: Path, destination: Path) -> None:
+    tmp_path = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+    shutil.copy2(source, tmp_path)
+    with tmp_path.open("rb") as handle:
+        os.fsync(handle.fileno())
+    tmp_path.replace(destination)
+
+
+def _remove_other_files(stage_dir: Path, keep: Path) -> None:
+    for existing in stage_dir.iterdir():
+        if existing == keep or existing.name == ".lock" or not existing.is_file():
+            continue
+        existing.unlink()
 
 
 def _path_fingerprint(path: Path) -> dict[str, Any]:

@@ -37,7 +37,14 @@ Speaker map:
 
 JSON schema:
 {
-  "corrected_text": "Corrected transcript text as one markdown-compatible string.",
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 1.0,
+      "speaker": "SPEAKER_00",
+      "corrected_text": "Corrected text for this speaker turn."
+    }
+  ],
   "glossary_delta": {
     "new_or_corrected_term": "short explanation or canonical spelling"
   },
@@ -46,6 +53,7 @@ JSON schema:
 
 Output rules:
 - Respond with exactly one JSON object and no surrounding markdown.
-- The top-level object must contain exactly these keys: corrected_text, glossary_delta, notes.
+- The top-level object must contain exactly these keys: segments, glossary_delta, notes.
+- Preserve turn order and speaker ids. Split output whenever the speaker changes.
 - glossary_delta must be an object, even when empty.
-- corrected_text must not include timestamps unless they are present in the transcript.
+- corrected_text values must not include timestamps unless they are present in the transcript.
