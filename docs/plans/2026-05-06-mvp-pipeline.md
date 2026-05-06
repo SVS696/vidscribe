@@ -129,11 +129,11 @@ video.mp4
 
 ### Task 3: Audio extraction
 
-- [ ] implement `audio.extract(video_path, out_path) -> Path` using
+- [x] implement `audio.extract(video_path, out_path) -> Path` using
       `ffmpeg -y -i {video} -ac 1 -ar 16000 -vn {out}.wav`
-- [ ] raise `AudioExtractionError` with helpful message if ffmpeg missing
-- [ ] write tests with mocked subprocess + tiny test video
-- [ ] run tests
+- [x] raise `AudioExtractionError` with helpful message if ffmpeg missing
+- [x] write tests with mocked subprocess + tiny test video
+- [x] run tests
 
 ### Task 4: faster-whisper STT (с реюзом noScribe-весов)
 
