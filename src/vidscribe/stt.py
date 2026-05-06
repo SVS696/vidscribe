@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import platform
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,66 @@ class AsrResult(BaseModel):
 
     def to_json(self, path: Path | str) -> Path:
         """Persist the ASR result as UTF-8 JSON."""
+
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(self.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return output
+
+
+class DiarTurn(BaseModel):
+    """A speaker turn returned by pyannote."""
+
+    start: float
+    end: float
+    speaker: str
+
+
+class DiarResult(BaseModel):
+    """JSON-serializable diarization output."""
+
+    turns: list[DiarTurn]
+
+    def to_json(self, path: Path | str) -> Path:
+        """Persist the diarization result as UTF-8 JSON."""
+
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(self.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return output
+
+
+class SttWord(AsrWord):
+    """A word-level ASR timestamp with the best matching speaker."""
+
+    speaker: str | None = None
+
+
+class SttSegment(BaseModel):
+    """A diarized transcript segment."""
+
+    start: float
+    end: float
+    text: str
+    speaker: str | None = None
+    words: list[SttWord] = Field(default_factory=list)
+
+
+class SttResult(BaseModel):
+    """JSON-serializable STT output after ASR and diarization are merged."""
+
+    segments: list[SttSegment]
+    language: str | None = None
+    model: str
+
+    def to_json(self, path: Path | str) -> Path:
+        """Persist the merged STT result as UTF-8 JSON."""
 
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +208,57 @@ def transcribe(
     )
 
 
+def diarize(
+    audio_path: Path | str,
+    assets: AssetPaths | None,
+    hf_token: str | None = None,
+) -> DiarResult:
+    """Run pyannote diarization and return speaker turns."""
+
+    pipeline_class = _pyannote_pipeline_class()
+    if assets is not None:
+        with tempfile.TemporaryDirectory(prefix="vidscribe-pyannote-") as temp_dir:
+            config_path = _patched_pyannote_config(assets, Path(temp_dir))
+            pipeline = pipeline_class.from_pretrained(str(config_path))
+            annotation = pipeline(str(audio_path))
+    else:
+        pipeline = pipeline_class.from_pretrained(
+            "pyannote/speaker-diarization-3.1",
+            use_auth_token=hf_token,
+        )
+        annotation = pipeline(str(audio_path))
+
+    return DiarResult(turns=_turns_from_annotation(annotation))
+
+
+def merge_asr_diar(asr: AsrResult, diar: DiarResult) -> SttResult:
+    """Assign diarization speakers to ASR words by maximum time overlap."""
+
+    segments: list[SttSegment] = []
+    for segment in asr.segments:
+        words = [
+            SttWord(
+                start=word.start,
+                end=word.end,
+                word=word.word,
+                probability=word.probability,
+                speaker=_speaker_for_interval(word.start, word.end, diar.turns),
+            )
+            for word in segment.words
+        ]
+        segments.append(
+            SttSegment(
+                start=segment.start,
+                end=segment.end,
+                text=segment.text,
+                speaker=_mode_speaker(words),
+                words=words,
+            )
+        )
+
+    return SttResult(segments=segments, language=asr.language, model=asr.model)
+
+
 def raw_words(raw_segment: Any) -> list[Any]:
     """Return raw faster-whisper words as a list."""
 
@@ -205,3 +317,68 @@ def _whisper_model_class() -> type[Any]:
             "faster-whisper is not installed. Install the project dependencies first."
         ) from exc
     return WhisperModel
+
+
+def _pyannote_pipeline_class() -> type[Any]:
+    try:
+        from pyannote.audio import Pipeline
+    except ImportError as exc:
+        raise STTAssetError(
+            "pyannote.audio is not installed. Install the project dependencies first."
+        ) from exc
+    return Pipeline
+
+
+def _patched_pyannote_config(assets: AssetPaths, temp_dir: Path) -> Path:
+    text = assets.config_yaml.read_text(encoding="utf-8")
+    replacements = {
+        "$model/segmentation": str(assets.segmentation_path),
+        "$model/embedding": str(assets.embedding_path),
+        "$model/plda": str(assets.pyannote_dir / "plda"),
+    }
+    for original, replacement in replacements.items():
+        text = text.replace(original, replacement)
+
+    output = temp_dir / "config.yaml"
+    output.write_text(text, encoding="utf-8")
+    return output
+
+
+def _turns_from_annotation(annotation: Any) -> list[DiarTurn]:
+    turns: list[DiarTurn] = []
+    for segment, _track, speaker in annotation.itertracks(yield_label=True):
+        turns.append(
+            DiarTurn(
+                start=float(segment.start),
+                end=float(segment.end),
+                speaker=str(speaker),
+            )
+        )
+    return turns
+
+
+def _speaker_for_interval(
+    start: float,
+    end: float,
+    turns: list[DiarTurn],
+) -> str | None:
+    best_speaker: str | None = None
+    best_overlap = 0.0
+    for turn in turns:
+        overlap = min(end, turn.end) - max(start, turn.start)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_speaker = turn.speaker
+    return best_speaker
+
+
+def _mode_speaker(words: list[SttWord]) -> str | None:
+    counts: dict[str, int] = {}
+    for word in words:
+        if word.speaker is None:
+            continue
+        counts[word.speaker] = counts.get(word.speaker, 0) + 1
+
+    if not counts:
+        return None
+    return max(counts, key=counts.get)

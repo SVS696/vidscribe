@@ -160,25 +160,25 @@ video.mp4
 
 ### Task 4b: Pyannote diarization + word-speaker mapping
 
-- [ ] implement `stt.diarize(audio_path, assets: AssetPaths | None,
+- [x] implement `stt.diarize(audio_path, assets: AssetPaths | None,
       hf_token=None) -> DiarResult` — список speaker turns [{start, end,
       speaker}]
-- [ ] предпочесть локальный pyannote из noScribe:
+- [x] предпочесть локальный pyannote из noScribe:
   - загрузить `config.yaml` через `Pipeline.from_pretrained(local_yaml_path)`
   - переопределить пути к segmentation/embedding моделям (yaml ссылается
     на HF-имена → подменить на локальные `.bin`)
   - HF-токен НЕ требуется
-- [ ] fallback: `Pipeline.from_pretrained('pyannote/speaker-diarization-3.1',
+- [x] fallback: `Pipeline.from_pretrained('pyannote/speaker-diarization-3.1',
       use_auth_token=hf_token)` — только если бандл отсутствует
-- [ ] implement `stt.merge_asr_diar(asr: AsrResult, diar: DiarResult) ->
+- [x] implement `stt.merge_asr_diar(asr: AsrResult, diar: DiarResult) ->
       SttResult` — для каждого word ищем speaker по максимальному перекрытию
       интервалов; на segment-level берём mode по словам
-- [ ] output `SttResult` (segments[{start,end,text,speaker,words[]}]) to JSON
-- [ ] write tests:
+- [x] output `SttResult` (segments[{start,end,text,speaker,words[]}]) to JSON
+- [x] write tests:
   - моки pyannote pipeline + проверка merge-логики на синтетических данных
       (overlapping speakers, gaps)
   - integration-test с noScribe бандлом (skip если нет)
-- [ ] run tests
+- [x] run tests
 
 ### Task 5: Keyframe extraction (renumbered: was Task 5)
 
