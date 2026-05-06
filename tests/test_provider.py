@@ -1,4 +1,6 @@
 import subprocess
+import json
+from base64 import b64decode
 from pathlib import Path
 from unittest.mock import ANY
 
@@ -29,6 +31,20 @@ def codex_completed(output_text: str, stdout: str = '{"event": "done"}'):
         return completed(stdout)
 
     return run
+
+
+class UrlopenResponse:
+    def __init__(self, body: str) -> None:
+        self.body = body.encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def read(self) -> bytes:
+        return self.body
 
 
 def test_claude_provider_runs_expected_command(mocker) -> None:
@@ -155,27 +171,34 @@ def test_claude_provider_deduplicates_frame_parent_dirs(mocker) -> None:
     assert command.count(str(first.resolve().parent)) == 1
 
 
-def test_ollama_provider_sends_prompt_on_stdin_without_frame_args(mocker) -> None:
-    run = mocker.patch(
-        "vidscribe.provider.subprocess.run",
-        return_value=completed('{"response": "local"}'),
+def test_ollama_provider_sends_frame_images_to_generate_api(tmp_path, mocker) -> None:
+    first = tmp_path / "a.jpg"
+    second = tmp_path / "b.jpg"
+    first.write_bytes(b"first-image")
+    second.write_bytes(b"second-image")
+    urlopen = mocker.patch(
+        "vidscribe.provider.urllib.request.urlopen",
+        return_value=UrlopenResponse('{"response": "local"}'),
     )
-    frames = [Path("/tmp/a.jpg"), Path("/tmp/b.jpg")]
 
     response = OllamaProvider(model="qwen2-vl:7b").correct(
         "prompt",
-        frame_paths=frames,
+        frame_paths=[first, second],
         timeout=60,
     )
 
     assert response.text == "local"
-    assert run.call_args.args[0] == [
-        "ollama",
-        "run",
-        "qwen2-vl:7b",
+    request = urlopen.call_args.args[0]
+    payload = json.loads(request.data.decode("utf-8"))
+    assert request.full_url == "http://127.0.0.1:11434/api/generate"
+    assert payload["model"] == "qwen2-vl:7b"
+    assert payload["prompt"] == "prompt"
+    assert payload["stream"] is False
+    assert [b64decode(image) for image in payload["images"]] == [
+        b"first-image",
+        b"second-image",
     ]
-    assert run.call_args.kwargs["input"] == "prompt"
-    assert run.call_args.kwargs["cwd"] is None
+    assert urlopen.call_args.kwargs["timeout"] == 60
 
 
 def test_provider_retries_once_on_transient_nonzero_exit(mocker) -> None:
