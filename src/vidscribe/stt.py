@@ -246,17 +246,19 @@ def diarize(
     if progress_hook is not None:
         call_kwargs["hook"] = progress_hook
 
+    waveform = _load_waveform(audio_path)
+
     if assets is not None:
         with tempfile.TemporaryDirectory(prefix="vidscribe-pyannote-") as temp_dir:
             config_path = _patched_pyannote_config(assets, Path(temp_dir))
             pipeline = pipeline_class.from_pretrained(str(config_path))
-            annotation = pipeline(str(audio_path), **call_kwargs)
+            annotation = pipeline(waveform, **call_kwargs)
     else:
         pipeline = pipeline_class.from_pretrained(
             "pyannote/speaker-diarization-3.1",
             use_auth_token=hf_token,
         )
-        annotation = pipeline(str(audio_path), **call_kwargs)
+        annotation = pipeline(waveform, **call_kwargs)
 
     return DiarResult(turns=_turns_from_annotation(annotation))
 
