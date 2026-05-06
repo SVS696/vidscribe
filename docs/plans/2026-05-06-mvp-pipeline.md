@@ -204,13 +204,13 @@ video.mp4
 
 ### Task 7: Cache layer
 
-- [ ] implement `cache.Cache(root: Path)` with methods `get(stage, key)`,
+- [x] implement `cache.Cache(root: Path)` with methods `get(stage, key)`,
       `set(stage, key, artefact)`, `key_for(stage, **inputs)` (sha256)
-- [ ] structure: `.vidscribe/cache/{video_hash}/{stage}/...`
-- [ ] cache hit logging through rich
-- [ ] CLI flag `--no-cache` to bypass for selected stages
-- [ ] write tests (in-memory + temp dir)
-- [ ] run tests
+- [x] structure: `.vidscribe/cache/{video_hash}/{stage}/...`
+- [x] cache hit logging through rich
+- [x] CLI flag `--no-cache` to bypass for selected stages
+- [x] write tests (in-memory + temp dir)
+- [x] run tests
 
 ### Task 8: Prompt templates
 

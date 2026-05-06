@@ -17,6 +17,7 @@ def test_app_config_defaults() -> None:
     assert config.language == "ru"
     assert config.hf_token is None
     assert config.cache_dir == Path(".vidscribe")
+    assert config.no_cache == ()
 
 
 def test_env_overrides_supported_values(monkeypatch) -> None:
@@ -47,6 +48,7 @@ def test_loads_optional_config_file(tmp_path, monkeypatch) -> None:
                 'language = "en"',
                 'hf_token = "from_file"',
                 'cache_dir = "/tmp/vidscribe-cache"',
+                'no_cache = ["stt", "frames"]',
             ]
         )
     )
@@ -61,6 +63,7 @@ def test_loads_optional_config_file(tmp_path, monkeypatch) -> None:
     assert config.language == "en"
     assert config.hf_token == "from_file"
     assert config.cache_dir == Path("/tmp/vidscribe-cache")
+    assert config.no_cache == ("stt", "frames")
 
 
 def test_cli_overrides_env_and_file(tmp_path, monkeypatch) -> None:
@@ -94,6 +97,18 @@ def test_cli_overrides_env_and_file(tmp_path, monkeypatch) -> None:
 def test_cli_callback_accepts_config_overrides() -> None:
     runner = CliRunner()
 
-    result = runner.invoke(app, ["--provider", "claude", "--model", "sonnet"])
+    result = runner.invoke(
+        app,
+        [
+            "--provider",
+            "claude",
+            "--model",
+            "sonnet",
+            "--no-cache",
+            "stt",
+            "--no-cache",
+            "frames",
+        ],
+    )
 
     assert result.exit_code == 0

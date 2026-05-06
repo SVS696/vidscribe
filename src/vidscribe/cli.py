@@ -48,6 +48,13 @@ def main(
         Path | None,
         typer.Option("--cache-dir", help="Cache directory."),
     ] = None,
+    no_cache: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--no-cache",
+            help="Bypass cache for a stage. Repeat for multiple stages.",
+        ),
+    ] = None,
 ) -> None:
     """Run vidscribe commands."""
 
@@ -62,6 +69,7 @@ def main(
                 "language": language,
                 "hf_token": hf_token,
                 "cache_dir": cache_dir,
+                "no_cache": tuple(no_cache) if no_cache else None,
             }
         )
     }

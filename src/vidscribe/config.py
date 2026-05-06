@@ -26,6 +26,7 @@ class AppConfig(BaseModel):
     language: str = "ru"
     hf_token: str | None = None
     cache_dir: Path = Path(".vidscribe")
+    no_cache: tuple[str, ...] = ()
 
 
 ENV_MAPPING = {
