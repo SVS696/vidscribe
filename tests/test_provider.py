@@ -58,7 +58,7 @@ def test_claude_provider_runs_expected_command(mocker) -> None:
             "--output-format",
             "json",
             "--max-turns",
-            "1",
+            "5",
             "--no-session-persistence",
             "--strict-mcp-config",
             "--mcp-config",
