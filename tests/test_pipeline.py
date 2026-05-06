@@ -249,7 +249,7 @@ def test_correct_chunks_accepts_inner_json_from_provider_text() -> None:
 def test_correct_chunks_rejects_non_json_provider_text() -> None:
     provider = FakeProvider([{"result": "not json"}], text="not json")
 
-    with pytest.raises(CorrectionError, match="not valid JSON"):
+    with pytest.raises(CorrectionError, match="not valid correction JSON"):
         correct_chunks(
             [chunk(0, 0, 5, "SPEAKER_00", "raw")],
             provider,
@@ -276,7 +276,7 @@ def test_correct_chunks_rejects_missing_corrected_text() -> None:
 def test_correct_chunks_rejects_empty_provider_response() -> None:
     provider = FakeProvider([], text="")
 
-    with pytest.raises(CorrectionError, match="correction JSON object"):
+    with pytest.raises(CorrectionError, match="not valid correction JSON"):
         correct_chunks(
             [chunk(0, 0, 5, "SPEAKER_00", "raw")],
             provider,
@@ -288,7 +288,7 @@ def test_correct_chunks_rejects_empty_provider_response() -> None:
 def test_correct_chunks_rejects_non_object_json_text() -> None:
     provider = FakeProvider([{"result": "[]"}], text="[]")
 
-    with pytest.raises(CorrectionError, match="correction JSON object"):
+    with pytest.raises(CorrectionError, match="not valid correction JSON"):
         correct_chunks(
             [chunk(0, 0, 5, "SPEAKER_00", "raw")],
             provider,
