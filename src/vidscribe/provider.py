@@ -49,7 +49,6 @@ class ClaudeCLIProvider:
         frame_paths: list[Path],
         timeout: int,
     ) -> ProviderResponse:
-        del frame_paths
         command = [
             "claude",
             "-p",
@@ -58,9 +57,23 @@ class ClaudeCLIProvider:
             "json",
             "--max-turns",
             "1",
+            "--no-session-persistence",
+            "--strict-mcp-config",
+            "--mcp-config",
+            "{}",
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            "Read",
+            "--disallowed-tools",
+            "Bash,Edit,MultiEdit,Write,NotebookEdit",
         ]
         if self.model:
             command.extend(["--model", self.model])
+        allowed_dirs = _parent_dirs(frame_paths)
+        if allowed_dirs:
+            command.append("--add-dir")
+            command.extend(str(path) for path in allowed_dirs)
         return _run_isolated_provider(command, timeout=timeout)
 
 
@@ -76,7 +89,17 @@ class CodexCLIProvider:
         frame_paths: list[Path],
         timeout: int,
     ) -> ProviderResponse:
-        command = ["codex", "exec", "--json", "--skip-git-repo-check"]
+        command = [
+            "codex",
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+        ]
         if self.model:
             command.extend(["--model", self.model])
         for frame_path in frame_paths:
@@ -115,6 +138,18 @@ def make(name: str, **opts: Any) -> Provider:
     raise ValueError(f"Unsupported provider: {name}")
 
 
+def _parent_dirs(paths: list[Path]) -> list[Path]:
+    dirs: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        parent = path.resolve().parent
+        if parent in seen:
+            continue
+        seen.add(parent)
+        dirs.append(parent)
+    return dirs
+
+
 def _run_provider(command: list[str], timeout: int) -> ProviderResponse:
     return _run_provider_in_cwd(command, timeout=timeout, cwd=None)
 
@@ -127,7 +162,14 @@ def _run_isolated_provider(command: list[str], timeout: int) -> ProviderResponse
 def _run_codex_provider(command: list[str], timeout: int) -> ProviderResponse:
     with tempfile.TemporaryDirectory(prefix="vidscribe-provider-") as temp_dir:
         output_path = Path(temp_dir) / "last-message.json"
-        command_with_output = [*command[:-1], "--output-last-message", str(output_path), command[-1]]
+        command_with_output = [
+            *command[:-1],
+            "--cd",
+            temp_dir,
+            "--output-last-message",
+            str(output_path),
+            command[-1],
+        ]
         response = _run_provider_in_cwd(
             command_with_output,
             timeout=timeout,

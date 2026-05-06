@@ -37,9 +37,11 @@ def test_claude_provider_runs_expected_command(mocker) -> None:
         return_value=completed('{"corrected_text": "fixed", "cost_estimate": 0.01}'),
     )
 
+    frame = Path("/tmp/vidscribe-frames/frame.jpg")
+
     response = ClaudeCLIProvider(model="sonnet").correct(
         "prompt",
-        frame_paths=[Path("frame.jpg")],
+        frame_paths=[frame],
         timeout=30,
     )
 
@@ -55,8 +57,20 @@ def test_claude_provider_runs_expected_command(mocker) -> None:
             "json",
             "--max-turns",
             "1",
+            "--no-session-persistence",
+            "--strict-mcp-config",
+            "--mcp-config",
+            "{}",
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            "Read",
+            "--disallowed-tools",
+            "Bash,Edit,MultiEdit,Write,NotebookEdit",
             "--model",
             "sonnet",
+            "--add-dir",
+            str(frame.resolve().parent),
         ],
         capture_output=True,
         text=True,
@@ -83,24 +97,49 @@ def test_codex_provider_reads_output_last_message(mocker) -> None:
     assert response.text == "done"
     assert response.cost_estimate == 0.2
     command = run.call_args.args[0]
-    assert command[:4] == [
+    assert command[:10] == [
         "codex",
         "exec",
         "--json",
         "--skip-git-repo-check",
-    ]
-    assert command[4:10] == [
+        "--sandbox",
+        "read-only",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
         "--model",
+    ]
+    assert command[10:17] == [
         "gpt-5.5",
         "--image",
         str(frame.resolve()),
+        "--cd",
+        ANY,
         "--output-last-message",
         ANY,
     ]
-    assert command[10:] == [
+    assert command[17:] == [
         "prompt",
     ]
     assert run.call_args.kwargs["cwd"].name.startswith("vidscribe-provider-")
+
+
+def test_claude_provider_deduplicates_frame_parent_dirs(mocker) -> None:
+    run = mocker.patch(
+        "vidscribe.provider.subprocess.run",
+        return_value=completed('{"corrected_text": "fixed"}'),
+    )
+    first = Path("/tmp/vidscribe-frames/a.jpg")
+    second = Path("/tmp/vidscribe-frames/b.jpg")
+
+    ClaudeCLIProvider(model="").correct(
+        "prompt",
+        frame_paths=[first, second],
+        timeout=30,
+    )
+
+    command = run.call_args.args[0]
+    assert command.count(str(first.resolve().parent)) == 1
 
 
 def test_ollama_provider_passes_frame_paths(mocker) -> None:
