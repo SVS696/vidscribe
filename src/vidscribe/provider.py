@@ -1,2 +1,240 @@
 """CLI provider abstractions."""
 
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Protocol
+
+
+class ProviderError(RuntimeError):
+    """Raised when a CLI provider cannot complete a correction request."""
+
+
+@dataclass(frozen=True)
+class ProviderResponse:
+    """Normalized response returned by all CLI-backed providers."""
+
+    text: str
+    raw_json: dict[str, Any]
+    cost_estimate: float | None
+    duration_s: float
+
+
+class Provider(Protocol):
+    """Protocol for transcript correction providers."""
+
+    def correct(
+        self,
+        prompt: str,
+        frame_paths: list[Path],
+        timeout: int,
+    ) -> ProviderResponse:
+        """Correct a transcript prompt with optional frame references."""
+
+
+@dataclass(frozen=True)
+class ClaudeCLIProvider:
+    """Claude Code CLI provider."""
+
+    model: str = "sonnet"
+
+    def correct(
+        self,
+        prompt: str,
+        frame_paths: list[Path],
+        timeout: int,
+    ) -> ProviderResponse:
+        del frame_paths
+        command = [
+            "claude",
+            "-p",
+            prompt,
+            "--output-format",
+            "json",
+            "--max-turns",
+            "1",
+            "--permission-mode",
+            "acceptEdits",
+        ]
+        if self.model:
+            command.extend(["--model", self.model])
+        return _run_provider(command, timeout=timeout)
+
+
+@dataclass(frozen=True)
+class CodexCLIProvider:
+    """Codex CLI provider."""
+
+    model: str = "gpt-5.5"
+
+    def correct(
+        self,
+        prompt: str,
+        frame_paths: list[Path],
+        timeout: int,
+    ) -> ProviderResponse:
+        del frame_paths
+        command = ["codex", "exec", "--json"]
+        if self.model:
+            command.extend(["--model", self.model])
+        command.append(prompt)
+        return _run_provider(command, timeout=timeout)
+
+
+@dataclass(frozen=True)
+class OllamaProvider:
+    """Local Ollama CLI provider."""
+
+    model: str = "qwen2-vl:7b"
+
+    def correct(
+        self,
+        prompt: str,
+        frame_paths: list[Path],
+        timeout: int,
+    ) -> ProviderResponse:
+        command = ["ollama", "run", self.model, prompt]
+        command.extend(str(path) for path in frame_paths)
+        return _run_provider(command, timeout=timeout)
+
+
+def make(name: str, **opts: Any) -> Provider:
+    """Create a provider by name."""
+
+    normalized = name.strip().lower()
+    if normalized == "claude":
+        return ClaudeCLIProvider(**opts)
+    if normalized == "codex":
+        return CodexCLIProvider(**opts)
+    if normalized == "ollama":
+        return OllamaProvider(**opts)
+    raise ValueError(f"Unsupported provider: {name}")
+
+
+def _run_provider(command: list[str], timeout: int) -> ProviderResponse:
+    started = time.monotonic()
+    last_error: ProviderError | None = None
+    for attempt in range(2):
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            binary = command[0]
+            raise ProviderError(
+                f"{binary} was not found. Install it and make sure it is on PATH."
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            last_error = ProviderError(
+                f"{command[0]} timed out after {timeout} seconds."
+            )
+            if attempt == 0:
+                continue
+            raise last_error from exc
+
+        if result.returncode == 0:
+            raw_json = _parse_provider_json(result.stdout)
+            return ProviderResponse(
+                text=_response_text(raw_json),
+                raw_json=raw_json,
+                cost_estimate=_cost_estimate(raw_json),
+                duration_s=time.monotonic() - started,
+            )
+
+        details = (result.stderr or result.stdout or "").strip()
+        message = f"{command[0]} exited with status {result.returncode}"
+        if details:
+            message = f"{message}: {details}"
+        last_error = ProviderError(message)
+        if attempt == 0 and _is_transient_error(details):
+            continue
+        raise last_error
+
+    if last_error is not None:
+        raise last_error
+    raise ProviderError(f"{command[0]} failed without details.")
+
+
+def _parse_provider_json(stdout: str) -> dict[str, Any]:
+    text = stdout.strip()
+    if not text:
+        raise ProviderError("Provider returned empty stdout.")
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = _parse_json_lines(text)
+
+    if not isinstance(parsed, dict):
+        raise ProviderError("Provider JSON output must be an object.")
+    return parsed
+
+
+def _parse_json_lines(text: str) -> Any:
+    last_json: Any = None
+    for line in text.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            last_json = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    if last_json is not None:
+        return last_json
+    raise ProviderError("Provider stdout did not contain valid JSON.")
+
+
+def _response_text(raw_json: dict[str, Any]) -> str:
+    for key in ("corrected_text", "text", "result", "response"):
+        value = raw_json.get(key)
+        if isinstance(value, str):
+            return value
+
+    message = raw_json.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+
+    raise ProviderError(
+        "Provider JSON output must include corrected_text, text, result, or response."
+    )
+
+
+def _cost_estimate(raw_json: dict[str, Any]) -> float | None:
+    value = raw_json.get("cost_estimate")
+    if value is None:
+        value = raw_json.get("cost_usd")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_transient_error(details: str) -> bool:
+    lowered = details.lower()
+    markers = (
+        "temporarily",
+        "timeout",
+        "timed out",
+        "try again",
+        "rate limit",
+        "rate-limit",
+        "overloaded",
+        "connection reset",
+        "connection refused",
+        "unavailable",
+    )
+    return any(marker in lowered for marker in markers)

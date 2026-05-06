@@ -227,23 +227,23 @@ video.mp4
 
 ### Task 9: Provider abstraction (CLI subprocess)
 
-- [ ] define `provider.Provider` protocol with method
+- [x] define `provider.Provider` protocol with method
       `correct(prompt: str, frame_paths: list[Path], timeout: int) ->
       ProviderResponse`
-- [ ] ProviderResponse: `{text: str, raw_json: dict, cost_estimate: float|None,
+- [x] ProviderResponse: `{text: str, raw_json: dict, cost_estimate: float|None,
       duration_s: float}`
-- [ ] implement `ClaudeCLIProvider(model='sonnet')`:
+- [x] implement `ClaudeCLIProvider(model='sonnet')`:
       `claude -p "$PROMPT" --output-format json --max-turns 1
       --permission-mode acceptEdits` (frame paths упомянуты в промпте,
       Read tool подхватит сам)
-- [ ] implement `CodexCLIProvider(model='gpt-5.5')`:
+- [x] implement `CodexCLIProvider(model='gpt-5.5')`:
       `codex exec --json "$PROMPT"` или эквивалент
-- [ ] implement `OllamaProvider(model='qwen2-vl:7b')`:
+- [x] implement `OllamaProvider(model='qwen2-vl:7b')`:
       `ollama run {model} "$PROMPT"` с image-флагами
-- [ ] provider factory `provider.make(name, **opts)`
-- [ ] handle non-zero exit, parse JSON, retry once on transient errors
-- [ ] write tests with mocked subprocess (simulate stdout/stderr/exit codes)
-- [ ] run tests
+- [x] provider factory `provider.make(name, **opts)`
+- [x] handle non-zero exit, parse JSON, retry once on transient errors
+- [x] write tests with mocked subprocess (simulate stdout/stderr/exit codes)
+- [x] run tests
 
 ### Task 10: Speaker identification
 
