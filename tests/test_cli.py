@@ -7,8 +7,17 @@ from vidscribe.chunker import Chunk
 from vidscribe.cli import _frames, _transcribe_audio, app
 from vidscribe.frames import FrameInfo
 from vidscribe.pipeline import CorrectedChunk
+from vidscribe.provider import ProviderResponse
 from vidscribe.config import AppConfig
-from vidscribe.stt import AsrResult, DiarResult, SttResult, SttSegment
+from vidscribe.stt import (
+    AsrResult,
+    AsrSegment,
+    AsrWord,
+    DiarResult,
+    DiarTurn,
+    SttResult,
+    SttSegment,
+)
 
 
 def stt_result() -> SttResult:
@@ -143,6 +152,114 @@ def test_pipeline_uses_provider_default_model_when_model_unset(tmp_path, mocker)
 
     assert result.exit_code == 0, result.output
     provider_mock.assert_called_once_with("claude")
+
+
+def test_pipeline_command_runs_fixture_e2e_with_mocked_stt_and_provider(
+    tmp_path,
+    fixtures_path,
+    mocker,
+) -> None:
+    runner = CliRunner()
+    video = fixtures_path / "short.mp4"
+    out = tmp_path / "fixture.md"
+
+    asr = AsrResult(
+        model="large-v3",
+        language="en",
+        segments=[
+            AsrSegment(
+                start=0.0,
+                end=0.6,
+                text="hello bob",
+                words=[
+                    AsrWord(start=0.0, end=0.2, word="hello"),
+                    AsrWord(start=0.2, end=0.6, word="bob"),
+                ],
+            ),
+            AsrSegment(
+                start=0.6,
+                end=1.0,
+                text="hi alice",
+                words=[
+                    AsrWord(start=0.6, end=0.8, word="hi"),
+                    AsrWord(start=0.8, end=1.0, word="alice"),
+                ],
+            ),
+        ],
+        words=[],
+    )
+    diar = DiarResult(
+        turns=[
+            DiarTurn(start=0.0, end=0.6, speaker="SPEAKER_00"),
+            DiarTurn(start=0.6, end=1.0, speaker="SPEAKER_01"),
+        ]
+    )
+
+    class FakeProvider:
+        model = "test-model"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def correct(self, prompt: str, frame_paths: list[Path], timeout: int):
+            self.calls.append(prompt)
+            if prompt.startswith("You are identifying speaker names"):
+                payload = {"speakers": {"SPEAKER_00": "Alice", "SPEAKER_01": "Bob"}}
+            else:
+                payload = {
+                    "corrected_text": f"Corrected chunk {len(self.calls) - 1}.",
+                    "glossary_delta": {},
+                    "notes": "",
+                }
+            return ProviderResponse(
+                text="",
+                raw_json=payload,
+                cost_estimate=None,
+                duration_s=0.01,
+            )
+
+    fake_provider = FakeProvider()
+    mocker.patch("vidscribe.cli.stt.detect_assets", return_value=None)
+    transcribe_mock = mocker.patch("vidscribe.cli.stt.transcribe", return_value=asr)
+    diarize_mock = mocker.patch("vidscribe.cli.stt.diarize", return_value=diar)
+    provider_mock = mocker.patch(
+        "vidscribe.cli.provider.make",
+        return_value=fake_provider,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "pipeline",
+            str(video),
+            "--provider",
+            "claude",
+            "--model",
+            "test-model",
+            "--whisper-model",
+            "large-v3",
+            "--out",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    transcript = out.read_text(encoding="utf-8")
+    assert "Alice" in transcript
+    assert "Bob" in transcript
+    assert "Corrected chunk 1." in transcript
+    assert "Corrected chunk 2." in transcript
+    assert transcribe_mock.call_args.args[0].name == "audio.wav"
+    diarize_mock.assert_called_once()
+    provider_mock.assert_called_once_with("claude", model="test-model")
+    assert len(fake_provider.calls) == 3
+    cache_root = tmp_path / ".vidscribe" / "cache"
+    assert list(cache_root.glob("*/audio/audio.wav"))
+    assert list(cache_root.glob("*/frames/frames.json"))
+    assert list(cache_root.glob("*/stt/artefact.json"))
 
 
 def test_pipeline_rejects_unknown_provider_before_expensive_work(tmp_path, mocker) -> None:

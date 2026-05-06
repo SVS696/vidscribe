@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -417,4 +418,18 @@ def test_pyannote_pipeline_class_raises_helpful_error_when_dependency_missing(mo
     mocker.patch.dict(sys.modules, {"pyannote.audio": None})
 
     with pytest.raises(stt.STTAssetError, match="pyannote.audio is not installed"):
+        stt._pyannote_pipeline_class()
+
+
+def test_pyannote_pipeline_class_wraps_binary_load_errors(mocker) -> None:
+    original_import = builtins.__import__
+
+    def failing_import(name, *args, **kwargs):
+        if name == "pyannote.audio":
+            raise OSError("Could not load torchaudio")
+        return original_import(name, *args, **kwargs)
+
+    mocker.patch("builtins.__import__", side_effect=failing_import)
+
+    with pytest.raises(stt.STTAssetError, match="torch and torchaudio"):
         stt._pyannote_pipeline_class()

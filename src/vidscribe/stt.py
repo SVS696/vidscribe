@@ -322,6 +322,11 @@ def _pyannote_pipeline_class() -> type[Any]:
         raise STTAssetError(
             "pyannote.audio is not installed. Install the project dependencies first."
         ) from exc
+    except OSError as exc:
+        raise STTAssetError(
+            "pyannote.audio could not be loaded. Check that torch and torchaudio "
+            "versions are compatible, then reinstall the project dependencies."
+        ) from exc
     return Pipeline
 
 

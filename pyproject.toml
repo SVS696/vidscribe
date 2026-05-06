@@ -14,7 +14,9 @@ dependencies = [
   "rich>=13",
   "ffmpeg-python>=0.2",
   "faster-whisper>=1",
-  "pyannote.audio>=3",
+  "pyannote.audio>=4,<5",
+  "torch>=2.9,<2.10",
+  "torchaudio>=2.9,<2.10",
   "jinja2>=3",
 ]
 
