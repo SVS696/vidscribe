@@ -182,13 +182,13 @@ video.mp4
 
 ### Task 5: Keyframe extraction (renumbered: was Task 5)
 
-- [ ] implement `frames.extract(video_path, out_dir, scene_threshold=0.3,
+- [x] implement `frames.extract(video_path, out_dir, scene_threshold=0.3,
       sample_every=10.0) -> list[FrameInfo]` через ffmpeg `select` filter +
       `showinfo`
-- [ ] FrameInfo: `{ts: float, path: Path, scene_change: bool}`
-- [ ] persist `frames.json` рядом с кадрами
-- [ ] write tests with short fixture video
-- [ ] run tests
+- [x] FrameInfo: `{ts: float, path: Path, scene_change: bool}`
+- [x] persist `frames.json` рядом с кадрами
+- [x] write tests with short fixture video
+- [x] run tests
 
 ### Task 6: Chunking
 
