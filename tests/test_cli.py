@@ -4,10 +4,11 @@ from typer.testing import CliRunner
 
 from vidscribe.cache import Cache
 from vidscribe.chunker import Chunk
-from vidscribe.cli import app
+from vidscribe.cli import _frames, _transcribe_audio, app
 from vidscribe.frames import FrameInfo
 from vidscribe.pipeline import CorrectedChunk
-from vidscribe.stt import SttResult, SttSegment
+from vidscribe.config import AppConfig
+from vidscribe.stt import AsrResult, DiarResult, SttResult, SttSegment
 
 
 def stt_result() -> SttResult:
@@ -195,6 +196,101 @@ def test_correct_command_uses_cached_stt_and_frames(tmp_path, mocker) -> None:
     provider_mock.assert_called_once_with("codex", model="gpt-5.5")
     cached_stt.assert_called_once()
     cached_frames.assert_called_once()
+
+
+def test_correct_no_cache_preserves_stt_and_frame_cache_reads(tmp_path, mocker) -> None:
+    runner = CliRunner()
+    video = video_file(tmp_path)
+    out = tmp_path / "corrected.md"
+    fake_frames = [FrameInfo(ts=0, path=tmp_path / "frame.jpg", scene_change=False)]
+
+    def cached_model(cache, stage, key, model_class):
+        assert stage not in cache.disabled_stages
+        return stt_result()
+
+    def cached_frames(cache, key):
+        assert "frames" not in cache.disabled_stages
+        return fake_frames
+
+    mocker.patch("vidscribe.cli._cached_model", side_effect=cached_model)
+    mocker.patch("vidscribe.cli._cached_frames", side_effect=cached_frames)
+    mocker.patch("vidscribe.cli._chunks", return_value=[chunk_item()])
+    mocker.patch("vidscribe.cli.provider.make", return_value=object())
+    mocker.patch(
+        "vidscribe.cli.speakers.identify",
+        return_value={"SPEAKER_00": "Alice"},
+    )
+    mocker.patch("vidscribe.cli.correct_chunks", return_value=[corrected_item()])
+    mocker.patch("vidscribe.cli.assembler.assemble", return_value="corrected")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "correct",
+            str(video),
+            "--no-cache",
+            "--out",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert out.read_text(encoding="utf-8") == "corrected"
+
+
+def test_frames_cache_invalidates_when_frame_rate_changes(tmp_path, mocker) -> None:
+    video = video_file(tmp_path)
+    cache = Cache(tmp_path / ".vidscribe")
+    video_key = cache.key_for("video", video=video)
+    calls = []
+
+    def extract(video_path, output_dir, sample_every):
+        calls.append(sample_every)
+        frame_path = output_dir / f"frame_{len(calls)}.jpg"
+        item = FrameInfo(ts=0, path=frame_path, scene_change=False)
+        (output_dir / "frames.json").write_text(
+            "[" + item.model_dump_json() + "]",
+            encoding="utf-8",
+        )
+        return [item]
+
+    mocker.patch("vidscribe.cli.frames.extract", side_effect=extract)
+
+    first = _frames(video, AppConfig(frame_rate=0.1), cache, video_key)
+    second = _frames(video, AppConfig(frame_rate=0.1), cache, video_key)
+    third = _frames(video, AppConfig(frame_rate=0.2), cache, video_key)
+
+    assert first == second
+    assert third != first
+    assert calls == [10.0, 5.0]
+
+
+def test_transcribe_cache_invalidates_when_stt_config_changes(tmp_path, mocker) -> None:
+    audio_path = tmp_path / "audio.wav"
+    audio_path.write_bytes(b"audio")
+    cache = Cache(tmp_path / ".vidscribe")
+    video_key = "video-key"
+    calls = []
+
+    def transcribe(audio, model, language):
+        calls.append((model, language))
+        return AsrResult(model=model, language=language, segments=[], words=[])
+
+    mocker.patch("vidscribe.cli.stt.detect_assets", return_value=None)
+    mocker.patch("vidscribe.cli.stt.transcribe", side_effect=transcribe)
+    mocker.patch("vidscribe.cli.stt.diarize", return_value=DiarResult(turns=[]))
+
+    first = _transcribe_audio(audio_path, AppConfig(whisper_model="large-v3"), cache, video_key)
+    second = _transcribe_audio(audio_path, AppConfig(whisper_model="large-v3"), cache, video_key)
+    third = _transcribe_audio(audio_path, AppConfig(whisper_model="medium"), cache, video_key)
+
+    assert first == second
+    assert third.model == "medium"
+    assert calls == [("large-v3", "ru"), ("medium", "ru")]
+    assert cache.get("asr", video_key) is not None
+    assert cache.get("diar", video_key) is not None
 
 
 def test_cache_list_and_clear_for_video(tmp_path) -> None:

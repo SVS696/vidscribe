@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,12 +58,10 @@ class ClaudeCLIProvider:
             "json",
             "--max-turns",
             "1",
-            "--permission-mode",
-            "acceptEdits",
         ]
         if self.model:
             command.extend(["--model", self.model])
-        return _run_provider(command, timeout=timeout)
+        return _run_isolated_provider(command, timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -82,7 +81,7 @@ class CodexCLIProvider:
         if self.model:
             command.extend(["--model", self.model])
         command.append(prompt)
-        return _run_provider(command, timeout=timeout)
+        return _run_isolated_provider(command, timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -116,6 +115,19 @@ def make(name: str, **opts: Any) -> Provider:
 
 
 def _run_provider(command: list[str], timeout: int) -> ProviderResponse:
+    return _run_provider_in_cwd(command, timeout=timeout, cwd=None)
+
+
+def _run_isolated_provider(command: list[str], timeout: int) -> ProviderResponse:
+    with tempfile.TemporaryDirectory(prefix="vidscribe-provider-") as temp_dir:
+        return _run_provider_in_cwd(command, timeout=timeout, cwd=Path(temp_dir))
+
+
+def _run_provider_in_cwd(
+    command: list[str],
+    timeout: int,
+    cwd: Path | None,
+) -> ProviderResponse:
     started = time.monotonic()
     last_error: ProviderError | None = None
     for attempt in range(2):
@@ -126,6 +138,7 @@ def _run_provider(command: list[str], timeout: int) -> ProviderResponse:
                 text=True,
                 timeout=timeout,
                 check=False,
+                cwd=cwd,
             )
         except FileNotFoundError as exc:
             binary = command[0]

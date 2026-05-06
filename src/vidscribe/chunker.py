@@ -93,6 +93,10 @@ def _time_groups(segments: list[SttSegment], window_s: float) -> list[list[SttSe
     current: list[SttSegment] = []
 
     for segment in segments:
+        if current and segment.speaker != current[-1].speaker:
+            groups.append(current)
+            current = []
+
         while current and segment.start >= window_end:
             groups.append(current)
             current = []
@@ -130,11 +134,12 @@ def _scene_groups(
     )
 
     for segment in segments:
+        speaker_changed = current and segment.speaker != current[-1].speaker
         boundary_crossed = (
             current and next_boundary is not None and segment.start >= next_boundary
         )
         too_wide = current and segment.end - current[0].start > window_s
-        if boundary_crossed or too_wide:
+        if boundary_crossed or too_wide or speaker_changed:
             groups.append(current)
             current = []
             while (

@@ -2,23 +2,23 @@
 
 ## Overview
 
-CLI-инструмент `vidscribe` для распознавания видео полностью локально (ffmpeg
-+ whisperX) с последующей корректировкой через CLI-провайдеров (claude / codex
-/ ollama). Заменяет текущий flow noScribe → Gemini, убирая зависимость от
-облачной мультимодалки, часовые лимиты и галлюцинации.
+CLI-инструмент `vidscribe` для распознавания видео полностью локально (ffmpeg,
+faster-whisper, pyannote) с последующей корректировкой через CLI-провайдеров
+(claude / codex / ollama). Заменяет текущий flow noScribe → Gemini, убирая
+зависимость от облачной мультимодалки, часовые лимиты и галлюцинации.
 
 **Pipeline:**
 ```
 video.mp4
   ├─ ffmpeg → audio 16k mono
-  │           ├─ faster-whisper (word_timestamps=True) → asr_segments.json
-  │           └─ pyannote diarization → diar.json
-  │              → merge asr+diar → segments.json
+  │           ├─ faster-whisper (word_timestamps=True) → asr/artefact.json
+  │           └─ pyannote diarization → diar/artefact.json
+  │              → merge asr+diar → stt/artefact.json
   ├─ ffmpeg → keyframes (scene-detect + sampling) → frames.json
-  ├─ chunker → chunks.json (по сменам говорящего / окну / сценам)
-  ├─ speaker-id → speakers.json (LLM пытается извлечь имена из транскрипта/кадров)
-  ├─ correction loop → corrected_chunks/ (LLM правит чанк за чанком + копит глоссарий)
-  └─ assembler → final.md
+  ├─ chunker → chunks/artefact.json (по сменам говорящего / окну / сценам)
+  ├─ speaker-id → speakers/artefact.json (LLM пытается извлечь имена из транскрипта/кадров)
+  ├─ correction loop → corrected/artefact.json (LLM правит чанк за чанком + копит глоссарий)
+  └─ assembler → final/artefact.md
 ```
 
 **Ключевая идея:** провайдер вызывается как subprocess (как у ralphex), не
@@ -44,10 +44,10 @@ video.mp4
       указанием локальных путей, либо из готового `config.yaml`.
   - bundle-detection: `/Applications/noScribe.app/Contents/Resources/` — если
     есть, по умолчанию используем оттуда; иначе fallback на HF (с токеном).
-- **STT-стек: faster-whisper напрямую** (без whisperX-обёртки). Word-level
+- **STT-стек: faster-whisper напрямую** (без отдельной alignment-обёртки). Word-level
   timestamps через `word_timestamps=True` (cross-attention) — точности ±50ms
   хватает для chunking по говорящему и привязки кадров. Отказались от
-  whisperX, чтобы не тащить wav2vec2 alignment-модели на каждый язык
+  дополнительного forced alignment, чтобы не тащить wav2vec2 модели на каждый язык
   (~500MB-1GB) — для русского forced alignment даёт минимальный выигрыш над
   cross-attention timestamps.
 - **Default модель:** `noscribe-precise` (large-v3 ct2 из бандла, ~1.5GB).
@@ -233,9 +233,9 @@ video.mp4
 - [x] ProviderResponse: `{text: str, raw_json: dict, cost_estimate: float|None,
       duration_s: float}`
 - [x] implement `ClaudeCLIProvider(model='sonnet')`:
-      `claude -p "$PROMPT" --output-format json --max-turns 1
-      --permission-mode acceptEdits` (frame paths упомянуты в промпте,
-      Read tool подхватит сам)
+      `claude -p "$PROMPT" --output-format json --max-turns 1`
+      from an isolated temporary working directory (frame paths упомянуты в
+      промпте, Read tool подхватит сам)
 - [x] implement `CodexCLIProvider(model='gpt-5.5')`:
       `codex exec --json "$PROMPT"` или эквивалент
 - [x] implement `OllamaProvider(model='qwen2-vl:7b')`:
@@ -331,16 +331,22 @@ video.mp4
 ```
 .vidscribe/cache/{video_sha256}/
   audio/audio.wav
-  stt/segments.json          # whisperX output
+  asr/artefact.json          # faster-whisper word timestamps
+  diar/artefact.json         # pyannote speaker turns
+  stt/artefact.json          # merged ASR + diarization
+  stt/metadata.json
   frames/frames.json
+  frames/metadata.json
   frames/00_00_05_000.jpg ...
-  chunks/chunks.json
-  speakers/speakers.json
-  corrected/chunk_0001.json  # one per chunk
-  corrected/chunk_0002.json
-  ...
-  final/transcript.md
+  chunks/artefact.json
+  speakers/artefact.json
+  corrected/artefact.json
+  final/artefact.md
 ```
+
+Chunk and corrected artefacts use content-derived cache keys that include the
+stage inputs, provider class/model, and glossary snapshot; they are not keyed
+only by the video hash directory.
 
 **Provider invocation (Claude example):**
 
@@ -348,9 +354,8 @@ video.mp4
 prompt = render("correct_chunk", chunk=chunk, frame_paths=chunk.frame_paths,
                 glossary=glossary, speakers=speakers)
 result = subprocess.run(
-    ["claude", "-p", prompt, "--output-format", "json",
-     "--max-turns", "1", "--permission-mode", "acceptEdits"],
-    capture_output=True, text=True, timeout=300, check=True,
+    ["claude", "-p", prompt, "--output-format", "json", "--max-turns", "1"],
+    capture_output=True, text=True, timeout=300, check=True, cwd=temp_dir,
 )
 parsed = json.loads(result.stdout)  # claude's wrapper JSON
 inner = json.loads(parsed["result"])  # our JSON inside

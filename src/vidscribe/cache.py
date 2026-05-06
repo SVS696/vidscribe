@@ -114,9 +114,7 @@ class Cache:
         for path in preferred:
             if path.exists():
                 return path
-
-        files = sorted(path for path in stage_dir.iterdir() if path.is_file())
-        return files[0] if files else None
+        return None
 
 
 def _jsonable(value: Any) -> Any:

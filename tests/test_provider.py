@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+from unittest.mock import ANY
 
 import pytest
 
@@ -45,8 +46,6 @@ def test_claude_provider_runs_expected_command(mocker) -> None:
             "json",
             "--max-turns",
             "1",
-            "--permission-mode",
-            "acceptEdits",
             "--model",
             "sonnet",
         ],
@@ -54,7 +53,9 @@ def test_claude_provider_runs_expected_command(mocker) -> None:
         text=True,
         timeout=30,
         check=False,
+        cwd=ANY,
     )
+    assert run.call_args.kwargs["cwd"].name.startswith("vidscribe-provider-")
 
 
 def test_codex_provider_accepts_json_lines_stdout(mocker) -> None:
@@ -81,6 +82,7 @@ def test_codex_provider_accepts_json_lines_stdout(mocker) -> None:
         "gpt-5.5",
         "prompt",
     ]
+    assert run.call_args.kwargs["cwd"].name.startswith("vidscribe-provider-")
 
 
 def test_ollama_provider_passes_frame_paths(mocker) -> None:
@@ -105,6 +107,7 @@ def test_ollama_provider_passes_frame_paths(mocker) -> None:
         "/tmp/a.jpg",
         "/tmp/b.jpg",
     ]
+    assert run.call_args.kwargs["cwd"] is None
 
 
 def test_provider_retries_once_on_transient_nonzero_exit(mocker) -> None:
@@ -149,6 +152,16 @@ def test_provider_raises_for_invalid_json(mocker) -> None:
     )
 
     with pytest.raises(ProviderError, match="valid JSON"):
+        CodexCLIProvider().correct("prompt", frame_paths=[], timeout=10)
+
+
+def test_provider_raises_helpful_error_when_binary_missing(mocker) -> None:
+    mocker.patch(
+        "vidscribe.provider.subprocess.run",
+        side_effect=FileNotFoundError,
+    )
+
+    with pytest.raises(ProviderError, match="codex was not found"):
         CodexCLIProvider().correct("prompt", frame_paths=[], timeout=10)
 
 

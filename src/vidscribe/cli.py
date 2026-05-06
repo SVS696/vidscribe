@@ -24,7 +24,18 @@ app = typer.Typer(
 cache_app = typer.Typer(help="Manage cached pipeline artefacts.")
 app.add_typer(cache_app, name="cache")
 
-_ALL_STAGES = {"audio", "frames", "stt", "chunks", "speakers", "corrected", "final"}
+_ALL_STAGES = {
+    "audio",
+    "frames",
+    "asr",
+    "diar",
+    "stt",
+    "chunks",
+    "speakers",
+    "corrected",
+    "final",
+}
+_CORRECT_RECOMPUTE_STAGES = {"chunks", "speakers", "corrected", "final"}
 console = Console()
 
 
@@ -181,7 +192,11 @@ def extract_command(
     """Extract audio and keyframes without LLM calls."""
 
     config = config_from_context(ctx)
-    cache = _cache(config, no_cache=no_cache)
+    if no_cache:
+        disabled = set(config.no_cache) | _CORRECT_RECOMPUTE_STAGES
+        cache = Cache(config.cache_dir, disabled_stages=disabled, console=console)
+    else:
+        cache = _cache(config)
     video_key = cache.key_for("video", video=video)
     audio_path, frame_items = _extract(video, config, cache, video_key)
     console.print(f"audio: {audio_path}")
@@ -232,7 +247,11 @@ def correct_command(
     """Re-run correction from cached STT and frames."""
 
     config = _command_config(ctx, provider=provider_name, model=model)
-    cache = _cache(config, no_cache=no_cache)
+    if no_cache:
+        disabled = set(config.no_cache) | _CORRECT_RECOMPUTE_STAGES
+        cache = Cache(config.cache_dir, disabled_stages=disabled, console=console)
+    else:
+        cache = _cache(config)
     video_key = cache.key_for("video", video=video)
     stt_result = _cached_model(cache, "stt", video_key, SttResult)
     frame_items = _cached_frames(cache, video_key)
@@ -346,18 +365,23 @@ def _frames(
 ) -> list[FrameInfo]:
     output_dir = _stage_dir(cache, video_key, "frames")
     frames_json = output_dir / "frames.json"
+    metadata_path = output_dir / "metadata.json"
+    metadata = _frames_metadata(config)
     if "frames" not in cache.disabled_stages and frames_json.exists():
-        cache.console.log(f"cache hit: frames/{video_key}")
-        return [
-            FrameInfo.model_validate(item)
-            for item in json.loads(frames_json.read_text(encoding="utf-8"))
-        ]
+        cached_metadata = _read_json(metadata_path)
+        if cached_metadata == metadata:
+            cache.console.log(f"cache hit: frames/{video_key}")
+            return [
+                FrameInfo.model_validate(item)
+                for item in json.loads(frames_json.read_text(encoding="utf-8"))
+            ]
 
     frame_items = frames.extract(
         video,
         output_dir,
         sample_every=1 / config.frame_rate,
     )
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return frame_items
 
 
@@ -367,11 +391,13 @@ def _transcribe_audio(
     cache: Cache,
     video_key: str,
 ) -> SttResult:
+    assets = stt.detect_assets()
+    metadata = _stt_metadata(config, assets)
+    metadata_path = _stage_dir(cache, video_key, "stt") / "metadata.json"
     cached = cache.get("stt", video_key)
-    if isinstance(cached, dict):
+    if isinstance(cached, dict) and _read_json(metadata_path) == metadata:
         return SttResult.model_validate(cached)
 
-    assets = stt.detect_assets()
     asr = stt.transcribe(
         audio_path,
         model=config.whisper_model,
@@ -379,7 +405,10 @@ def _transcribe_audio(
     )
     diar = stt.diarize(audio_path, assets, hf_token=config.hf_token)
     result = stt.merge_asr_diar(asr, diar)
+    cache.set("asr", video_key, asr)
+    cache.set("diar", video_key, diar)
     cache.set("stt", video_key, result)
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return result
 
 
@@ -425,6 +454,30 @@ def _cached_frames(cache: Cache, video_key: str) -> list[FrameInfo]:
         FrameInfo.model_validate(item)
         for item in json.loads(frames_json.read_text(encoding="utf-8"))
     ]
+
+
+def _frames_metadata(config: AppConfig) -> dict[str, Any]:
+    return {
+        "frame_rate": config.frame_rate,
+        "sample_every": 1 / config.frame_rate,
+        "scene_threshold": 0.3,
+    }
+
+
+def _stt_metadata(config: AppConfig, assets: stt.AssetPaths | None) -> dict[str, Any]:
+    return {
+        "whisper_model": config.whisper_model,
+        "language": config.language,
+        "hf_token_present": bool(config.hf_token),
+        "diarization_source": "noscribe" if assets is not None else "huggingface",
+        "assets_root": str(assets.resources_dir) if assets is not None else None,
+    }
+
+
+def _read_json(path: Path) -> Any | None:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _cached_file(cache: Cache, stage: str, key: str) -> Path | None:

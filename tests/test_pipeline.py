@@ -153,3 +153,42 @@ def test_correct_chunks_rejects_non_json_provider_text() -> None:
             {"SPEAKER_00": "Иван"},
             cache=None,
         )
+
+
+def test_correct_chunks_rejects_missing_corrected_text() -> None:
+    provider = FakeProvider(
+        [{"result": '{"glossary_delta": {}, "notes": ""}'}],
+        text='{"glossary_delta": {}, "notes": ""}',
+    )
+
+    with pytest.raises(CorrectionError, match="corrected_text"):
+        correct_chunks(
+            [chunk(0, 0, 5, "SPEAKER_00", "raw")],
+            provider,
+            {"SPEAKER_00": "Иван"},
+            cache=None,
+        )
+
+
+def test_correct_chunks_rejects_empty_provider_response() -> None:
+    provider = FakeProvider([], text="")
+
+    with pytest.raises(CorrectionError, match="correction JSON object"):
+        correct_chunks(
+            [chunk(0, 0, 5, "SPEAKER_00", "raw")],
+            provider,
+            {"SPEAKER_00": "Иван"},
+            cache=None,
+        )
+
+
+def test_correct_chunks_rejects_non_object_json_text() -> None:
+    provider = FakeProvider([{"result": "[]"}], text="[]")
+
+    with pytest.raises(CorrectionError, match="correction JSON object"):
+        correct_chunks(
+            [chunk(0, 0, 5, "SPEAKER_00", "raw")],
+            provider,
+            {"SPEAKER_00": "Иван"},
+            cache=None,
+        )

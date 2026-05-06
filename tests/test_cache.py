@@ -62,6 +62,7 @@ def test_cache_copies_file_artefact(tmp_path) -> None:
 
     assert path == tmp_path / ".vidscribe" / "cache" / key / "frames" / "frames.json"
     assert path.read_text(encoding="utf-8") == '{"frames": []}'
+    assert cache.get("frames", key) is None
 
 
 def test_cache_hit_logs_through_rich(tmp_path) -> None:

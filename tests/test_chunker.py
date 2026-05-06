@@ -77,6 +77,20 @@ def test_time_strategy_uses_fixed_windows_from_first_segment() -> None:
     assert chunks[1].surrounding_context == "Before: b"
 
 
+def test_time_strategy_keeps_speaker_turns_separate_within_window() -> None:
+    stt = result(
+        segment(0, 10, "a", "SPEAKER_00"),
+        segment(10, 20, "b", "SPEAKER_01"),
+    )
+
+    chunks = chunk(stt, [], strategy="time", window_s=60)
+
+    assert [chunk.segments for chunk in chunks] == [
+        stt.segments[:1],
+        stt.segments[1:],
+    ]
+
+
 def test_scene_strategy_splits_at_scene_change_frames() -> None:
     stt = result(
         segment(0, 9, "opening", "SPEAKER_00"),

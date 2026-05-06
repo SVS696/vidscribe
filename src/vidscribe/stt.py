@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import platform
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -170,7 +169,7 @@ def transcribe(
 
     resolved_device = _resolve_device(device)
     model_path = _resolve_model_path(model)
-    compute_type = _compute_type_for_device(resolved_device)
+    compute_type = "int8"
     whisper_model_class = _whisper_model_class()
     whisper_model = whisper_model_class(
         str(model_path),
@@ -301,12 +300,6 @@ def _resolve_device(device: str) -> str:
     if torch.cuda.is_available():
         return "cuda"
     return "cpu"
-
-
-def _compute_type_for_device(device: str) -> str:
-    if platform.system() == "Darwin":
-        return "int8"
-    return "int8"
 
 
 def _whisper_model_class() -> type[Any]:

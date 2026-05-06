@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -383,3 +384,17 @@ def test_noscribe_diarize_integration_skips_without_bundle(fixtures_path) -> Non
     result = stt.diarize(audio_path, assets)
 
     assert isinstance(result.turns, list)
+
+
+def test_whisper_model_class_raises_helpful_error_when_dependency_missing(mocker) -> None:
+    mocker.patch.dict(sys.modules, {"faster_whisper": None})
+
+    with pytest.raises(stt.STTAssetError, match="faster-whisper is not installed"):
+        stt._whisper_model_class()
+
+
+def test_pyannote_pipeline_class_raises_helpful_error_when_dependency_missing(mocker) -> None:
+    mocker.patch.dict(sys.modules, {"pyannote.audio": None})
+
+    with pytest.raises(stt.STTAssetError, match="pyannote.audio is not installed"):
+        stt._pyannote_pipeline_class()

@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib import resources
 from typing import Any
 
-from jinja2 import Environment, StrictUndefined, TemplateError, meta
+from jinja2 import Environment, StrictUndefined, TemplateError
 
 
 class PromptRenderError(ValueError):
@@ -34,14 +34,6 @@ def render(name: str, **kwargs: Any) -> str:
         lstrip_blocks=True,
         undefined=StrictUndefined,
     )
-    parsed = env.parse(template_text)
-    required = meta.find_undeclared_variables(parsed)
-    missing = sorted(required.difference(kwargs))
-    if missing:
-        raise PromptRenderError(
-            f"missing prompt template values for {template_name}: {', '.join(missing)}"
-        )
-
     try:
         return env.from_string(template_text).render(**kwargs)
     except TemplateError as exc:

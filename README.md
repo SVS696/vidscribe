@@ -91,6 +91,14 @@ language = "ru"
 cache_dir = ".vidscribe"
 ```
 
+Global options may be passed before a subcommand: `--provider`, `--model`,
+`--chunk-strategy`, `--frame-rate`, `--whisper-model`, `--language`,
+`--hf-token`, `--cache-dir`, and `--speakers`.
+
+`frame_rate` is the sampled frame frequency in frames per second. The default
+`0.1` means one sampled frame every 10 seconds. Higher values provide more visual
+context and increase provider prompt size.
+
 Supported environment variables:
 
 ```bash
@@ -139,8 +147,12 @@ vidscribe cache clear
 vidscribe cache clear recording.mp4
 ```
 
-Use `--no-cache` on `pipeline`, `extract`, `transcribe`, or `correct` to bypass
-cached artifacts for that run.
+Use subcommand `--no-cache` on `pipeline`, `extract`, or `transcribe` to bypass
+all relevant cached artifacts for that run. On `correct`, subcommand
+`--no-cache` recomputes chunking, speaker identification, correction, and final
+assembly while still reading the cached STT and frame prerequisites. The global
+`--no-cache STAGE` option can be repeated for specific stages: `audio`, `frames`,
+`asr`, `diar`, `stt`, `chunks`, `speakers`, `corrected`, and `final`.
 
 ## noScribe model reuse
 
@@ -172,8 +184,10 @@ vidscribe pipeline recording.mp4 --whisper-model large-v3
 The provider is invoked as a subprocess; vidscribe does not use provider SDKs or
 store API keys.
 
-- `claude`: runs `claude -p ... --output-format json --max-turns 1`
-- `codex`: runs `codex exec --json ...`
+- `claude`: runs `claude -p PROMPT --output-format json --max-turns 1`, plus
+  `--model MODEL` when configured
+- `codex`: runs `codex exec --json ...` from an isolated temporary working
+  directory
 - `ollama`: runs `ollama run MODEL ...`
 
 The correction prompt requires a JSON object with `corrected_text`,
