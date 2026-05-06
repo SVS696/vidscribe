@@ -76,12 +76,13 @@ class CodexCLIProvider:
         frame_paths: list[Path],
         timeout: int,
     ) -> ProviderResponse:
-        del frame_paths
-        command = ["codex", "exec", "--json"]
+        command = ["codex", "exec", "--json", "--skip-git-repo-check"]
         if self.model:
             command.extend(["--model", self.model])
+        for frame_path in frame_paths:
+            command.extend(["--image", str(frame_path.resolve())])
         command.append(prompt)
-        return _run_isolated_provider(command, timeout=timeout)
+        return _run_codex_provider(command, timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -123,10 +124,34 @@ def _run_isolated_provider(command: list[str], timeout: int) -> ProviderResponse
         return _run_provider_in_cwd(command, timeout=timeout, cwd=Path(temp_dir))
 
 
+def _run_codex_provider(command: list[str], timeout: int) -> ProviderResponse:
+    with tempfile.TemporaryDirectory(prefix="vidscribe-provider-") as temp_dir:
+        output_path = Path(temp_dir) / "last-message.json"
+        command_with_output = [*command[:-1], "--output-last-message", str(output_path), command[-1]]
+        response = _run_provider_in_cwd(
+            command_with_output,
+            timeout=timeout,
+            cwd=Path(temp_dir),
+            parse_stdout=False,
+        )
+        output_text = output_path.read_text(encoding="utf-8").strip()
+        if not output_text:
+            raise ProviderError("codex did not write an output-last-message.")
+        raw_json = _parse_provider_json(output_text)
+        return ProviderResponse(
+            text=_response_text(raw_json),
+            raw_json=raw_json,
+            cost_estimate=_cost_estimate(raw_json),
+            duration_s=response.duration_s,
+        )
+
+
 def _run_provider_in_cwd(
     command: list[str],
     timeout: int,
     cwd: Path | None,
+    *,
+    parse_stdout: bool = True,
 ) -> ProviderResponse:
     started = time.monotonic()
     last_error: ProviderError | None = None
@@ -154,6 +179,13 @@ def _run_provider_in_cwd(
             raise last_error from exc
 
         if result.returncode == 0:
+            if not parse_stdout:
+                return ProviderResponse(
+                    text="",
+                    raw_json={},
+                    cost_estimate=None,
+                    duration_s=time.monotonic() - started,
+                )
             raw_json = _parse_provider_json(result.stdout)
             return ProviderResponse(
                 text=_response_text(raw_json),

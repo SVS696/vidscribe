@@ -73,6 +73,18 @@ def test_provider_identifies_known_speaker_and_unknown_falls_back() -> None:
     ]
 
 
+def test_provider_receives_absolute_frame_paths(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    provider = FakeProvider(raw_json={"speakers": {}})
+    frames = [FrameInfo(ts=1, path=Path("frames/a.jpg"), scene_change=False)]
+
+    identify(stt_result(), frames, provider)
+
+    prompt, frame_paths, _timeout = provider.calls[0]
+    assert frame_paths == [(tmp_path / "frames/a.jpg").resolve()]
+    assert str((tmp_path / "frames/a.jpg").resolve()) in prompt
+
+
 def test_provider_text_json_is_accepted() -> None:
     provider = FakeProvider(text='{"speakers": {"SPEAKER_01": "Алиса"}}')
 

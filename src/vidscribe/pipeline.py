@@ -87,14 +87,15 @@ def _correct_chunk(
     glossary: Mapping[str, str],
     timeout: int,
 ) -> CorrectedChunk:
+    frame_paths = [path.resolve() for path in chunk.frame_paths]
     prompt = render(
         "correct_chunk",
         transcript=_chunk_transcript(chunk, speakers),
-        frame_paths=[str(path) for path in chunk.frame_paths],
+        frame_paths=[str(path) for path in frame_paths],
         glossary=dict(glossary),
         speaker_map=dict(speakers),
     )
-    response = provider.correct(prompt, frame_paths=chunk.frame_paths, timeout=timeout)
+    response = provider.correct(prompt, frame_paths=frame_paths, timeout=timeout)
     payload = _correction_payload(response)
     return CorrectedChunk(
         idx=chunk.idx,
@@ -107,7 +108,7 @@ def _correct_chunk(
         raw_json=response.raw_json,
         cost_estimate=response.cost_estimate,
         duration_s=response.duration_s,
-        frame_paths=chunk.frame_paths,
+        frame_paths=frame_paths,
     )
 
 

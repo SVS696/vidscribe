@@ -54,7 +54,7 @@ def identify(
             return _finalize(speaker_ids, _string_dict(cached))
 
     selected = _representative_segments(stt, speaker_ids)
-    frame_paths = _representative_frame_paths(frames, selected)
+    frame_paths = [path.resolve() for path in _representative_frame_paths(frames, selected)]
     prompt = render(
         "identify_speakers",
         transcript=_transcript_excerpt(selected),

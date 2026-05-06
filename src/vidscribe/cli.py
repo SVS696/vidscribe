@@ -192,11 +192,7 @@ def extract_command(
     """Extract audio and keyframes without LLM calls."""
 
     config = config_from_context(ctx)
-    if no_cache:
-        disabled = set(config.no_cache) | _CORRECT_RECOMPUTE_STAGES
-        cache = Cache(config.cache_dir, disabled_stages=disabled, console=console)
-    else:
-        cache = _cache(config)
+    cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
     audio_path, frame_items = _extract(video, config, cache, video_key)
     console.print(f"audio: {audio_path}")
@@ -372,7 +368,7 @@ def _frames(
         if cached_metadata == metadata:
             cache.console.log(f"cache hit: frames/{video_key}")
             return [
-                FrameInfo.model_validate(item)
+                _absolute_frame_info(FrameInfo.model_validate(item))
                 for item in json.loads(frames_json.read_text(encoding="utf-8"))
             ]
 
@@ -382,7 +378,7 @@ def _frames(
         sample_every=1 / config.frame_rate,
     )
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-    return frame_items
+    return [_absolute_frame_info(frame) for frame in frame_items]
 
 
 def _transcribe_audio(
@@ -395,7 +391,12 @@ def _transcribe_audio(
     metadata = _stt_metadata(config, assets)
     metadata_path = _stage_dir(cache, video_key, "stt") / "metadata.json"
     cached = cache.get("stt", video_key)
-    if isinstance(cached, dict) and _read_json(metadata_path) == metadata:
+    dependencies_disabled = bool({"audio", "asr", "diar", "stt"} & cache.disabled_stages)
+    if (
+        not dependencies_disabled
+        and isinstance(cached, dict)
+        and _read_json(metadata_path) == metadata
+    ):
         return SttResult.model_validate(cached)
 
     asr = stt.transcribe(
@@ -451,9 +452,13 @@ def _cached_frames(cache: Cache, video_key: str) -> list[FrameInfo]:
     if not frames_json.exists():
         raise typer.BadParameter("Missing cached frames artefact for this video.")
     return [
-        FrameInfo.model_validate(item)
+        _absolute_frame_info(FrameInfo.model_validate(item))
         for item in json.loads(frames_json.read_text(encoding="utf-8"))
     ]
+
+
+def _absolute_frame_info(frame: FrameInfo) -> FrameInfo:
+    return frame.model_copy(update={"path": frame.path.resolve()})
 
 
 def _frames_metadata(config: AppConfig) -> dict[str, Any]:

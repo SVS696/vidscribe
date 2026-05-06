@@ -133,6 +133,35 @@ def test_extract_command_runs_audio_and_frames_only(tmp_path, mocker) -> None:
     extract_mock.assert_called_once()
 
 
+def test_extract_no_cache_disables_audio_and_frames_cache(tmp_path, mocker) -> None:
+    runner = CliRunner()
+    video = video_file(tmp_path)
+
+    extract_mock = mocker.patch(
+        "vidscribe.cli._extract",
+        return_value=(
+            tmp_path / "audio.wav",
+            [FrameInfo(ts=0, path=tmp_path / "frame.jpg", scene_change=False)],
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "extract",
+            str(video),
+            "--no-cache",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    cache = extract_mock.call_args.args[2]
+    assert "audio" in cache.disabled_stages
+    assert "frames" in cache.disabled_stages
+
+
 def test_transcribe_command_runs_stt_without_frames(tmp_path, mocker) -> None:
     runner = CliRunner()
     video = video_file(tmp_path)
@@ -285,12 +314,42 @@ def test_transcribe_cache_invalidates_when_stt_config_changes(tmp_path, mocker) 
     first = _transcribe_audio(audio_path, AppConfig(whisper_model="large-v3"), cache, video_key)
     second = _transcribe_audio(audio_path, AppConfig(whisper_model="large-v3"), cache, video_key)
     third = _transcribe_audio(audio_path, AppConfig(whisper_model="medium"), cache, video_key)
+    no_asr_cache = Cache(tmp_path / ".vidscribe", disabled_stages={"asr"})
+    fourth = _transcribe_audio(
+        audio_path,
+        AppConfig(whisper_model="medium"),
+        no_asr_cache,
+        video_key,
+    )
 
     assert first == second
     assert third.model == "medium"
-    assert calls == [("large-v3", "ru"), ("medium", "ru")]
+    assert fourth.model == "medium"
+    assert calls == [("large-v3", "ru"), ("medium", "ru"), ("medium", "ru")]
     assert cache.get("asr", video_key) is not None
     assert cache.get("diar", video_key) is not None
+
+
+def test_frames_returns_absolute_paths_from_relative_cache_dir(tmp_path, mocker, monkeypatch) -> None:
+    video = video_file(tmp_path)
+    cache = Cache(Path(".vidscribe-test"))
+    video_key = cache.key_for("video", video=video)
+    monkeypatch.chdir(tmp_path)
+
+    def extract(video_path, output_dir, sample_every):
+        frame_path = output_dir / "frame.jpg"
+        item = FrameInfo(ts=0, path=frame_path, scene_change=False)
+        (output_dir / "frames.json").write_text(
+            "[" + item.model_dump_json() + "]",
+            encoding="utf-8",
+        )
+        return [item]
+
+    mocker.patch("vidscribe.cli.frames.extract", side_effect=extract)
+
+    frame_items = _frames(video, AppConfig(frame_rate=0.1), cache, video_key)
+
+    assert frame_items[0].path.is_absolute()
 
 
 def test_cache_list_and_clear_for_video(tmp_path) -> None:

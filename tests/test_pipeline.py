@@ -89,6 +89,30 @@ def test_correct_chunks_accumulates_glossary_between_provider_calls() -> None:
     assert provider.calls[0][2] == 300
 
 
+def test_correct_chunks_passes_absolute_frame_paths_to_prompt_and_provider(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    provider = FakeProvider(
+        [
+            {
+                "corrected_text": "Fixed",
+                "glossary_delta": {},
+                "notes": "",
+            }
+        ]
+    )
+
+    correct_chunks(
+        [chunk(0, 0, 5, "SPEAKER_00", "raw", frame_paths=[Path("frames/a.jpg")])],
+        provider,
+        {"SPEAKER_00": "Иван"},
+        cache=None,
+    )
+
+    prompt, frame_paths, _timeout = provider.calls[0]
+    assert frame_paths == [(tmp_path / "frames/a.jpg").resolve()]
+    assert str((tmp_path / "frames/a.jpg").resolve()) in prompt
+
+
 def test_correct_chunks_caches_each_chunk_with_glossary_snapshot(tmp_path) -> None:
     chunks = [
         chunk(0, 0, 5, "SPEAKER_00", "первый"),

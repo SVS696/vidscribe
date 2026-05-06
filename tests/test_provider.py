@@ -22,6 +22,15 @@ def completed(stdout: str, returncode: int = 0, stderr: str = ""):
     )
 
 
+def codex_completed(output_text: str, stdout: str = '{"event": "done"}'):
+    def run(command, **kwargs):
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(output_text, encoding="utf-8")
+        return completed(stdout)
+
+    return run
+
+
 def test_claude_provider_runs_expected_command(mocker) -> None:
     run = mocker.patch(
         "vidscribe.provider.subprocess.run",
@@ -58,28 +67,37 @@ def test_claude_provider_runs_expected_command(mocker) -> None:
     assert run.call_args.kwargs["cwd"].name.startswith("vidscribe-provider-")
 
 
-def test_codex_provider_accepts_json_lines_stdout(mocker) -> None:
+def test_codex_provider_reads_output_last_message(mocker) -> None:
     run = mocker.patch(
         "vidscribe.provider.subprocess.run",
-        return_value=completed(
-            '{"event": "started"}\n{"corrected_text": "done", "cost_usd": "0.2"}'
-        ),
+        side_effect=codex_completed('{"corrected_text": "done", "cost_usd": "0.2"}'),
     )
+    frame = Path("/tmp/frame.jpg")
 
     response = CodexCLIProvider(model="gpt-5.5").correct(
         "prompt",
-        frame_paths=[],
+        frame_paths=[frame],
         timeout=45,
     )
 
     assert response.text == "done"
     assert response.cost_estimate == 0.2
-    assert run.call_args.args[0] == [
+    command = run.call_args.args[0]
+    assert command[:4] == [
         "codex",
         "exec",
         "--json",
+        "--skip-git-repo-check",
+    ]
+    assert command[4:10] == [
         "--model",
         "gpt-5.5",
+        "--image",
+        str(frame.resolve()),
+        "--output-last-message",
+        ANY,
+    ]
+    assert command[10:] == [
         "prompt",
     ]
     assert run.call_args.kwargs["cwd"].name.startswith("vidscribe-provider-")
@@ -111,12 +129,20 @@ def test_ollama_provider_passes_frame_paths(mocker) -> None:
 
 
 def test_provider_retries_once_on_transient_nonzero_exit(mocker) -> None:
+    calls = 0
+
+    def run(command, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return completed("", returncode=1, stderr="temporarily unavailable")
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text('{"corrected_text": "retry-ok"}', encoding="utf-8")
+        return completed('{"event": "done"}')
+
     run = mocker.patch(
         "vidscribe.provider.subprocess.run",
-        side_effect=[
-            completed("", returncode=1, stderr="temporarily unavailable"),
-            completed('{"corrected_text": "retry-ok"}'),
-        ],
+        side_effect=run,
     )
 
     response = CodexCLIProvider().correct("prompt", frame_paths=[], timeout=10)
@@ -148,7 +174,7 @@ def test_provider_retries_timeout_once_then_raises(mocker) -> None:
 def test_provider_raises_for_invalid_json(mocker) -> None:
     mocker.patch(
         "vidscribe.provider.subprocess.run",
-        return_value=completed("not json"),
+        side_effect=codex_completed("not json"),
     )
 
     with pytest.raises(ProviderError, match="valid JSON"):
