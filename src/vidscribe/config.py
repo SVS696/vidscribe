@@ -27,6 +27,7 @@ class AppConfig(BaseModel):
     hf_token: str | None = None
     cache_dir: Path = Path(".vidscribe")
     no_cache: tuple[str, ...] = ()
+    speakers: tuple[str, ...] = ()
 
 
 ENV_MAPPING = {

@@ -55,6 +55,13 @@ def main(
             help="Bypass cache for a stage. Repeat for multiple stages.",
         ),
     ] = None,
+    speakers: Annotated[
+        str | None,
+        typer.Option(
+            "--speakers",
+            help="Comma-separated speaker names, positionally mapped by speaker index.",
+        ),
+    ] = None,
 ) -> None:
     """Run vidscribe commands."""
 
@@ -70,6 +77,7 @@ def main(
                 "hf_token": hf_token,
                 "cache_dir": cache_dir,
                 "no_cache": tuple(no_cache) if no_cache else None,
+                "speakers": _parse_speakers(speakers) if speakers is not None else None,
             }
         )
     }
@@ -79,3 +87,7 @@ def config_from_context(ctx: typer.Context) -> AppConfig:
     """Return callback-loaded config for subcommands."""
 
     return ctx.obj["config"]
+
+
+def _parse_speakers(value: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in value.split(",") if part.strip())

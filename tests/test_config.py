@@ -18,6 +18,7 @@ def test_app_config_defaults() -> None:
     assert config.hf_token is None
     assert config.cache_dir == Path(".vidscribe")
     assert config.no_cache == ()
+    assert config.speakers == ()
 
 
 def test_env_overrides_supported_values(monkeypatch) -> None:
@@ -49,6 +50,7 @@ def test_loads_optional_config_file(tmp_path, monkeypatch) -> None:
                 'hf_token = "from_file"',
                 'cache_dir = "/tmp/vidscribe-cache"',
                 'no_cache = ["stt", "frames"]',
+                'speakers = ["Иван", "Алиса"]',
             ]
         )
     )
@@ -64,6 +66,7 @@ def test_loads_optional_config_file(tmp_path, monkeypatch) -> None:
     assert config.hf_token == "from_file"
     assert config.cache_dir == Path("/tmp/vidscribe-cache")
     assert config.no_cache == ("stt", "frames")
+    assert config.speakers == ("Иван", "Алиса")
 
 
 def test_cli_overrides_env_and_file(tmp_path, monkeypatch) -> None:
@@ -108,6 +111,8 @@ def test_cli_callback_accepts_config_overrides() -> None:
             "stt",
             "--no-cache",
             "frames",
+            "--speakers",
+            "Иван, Алиса",
         ],
     )
 

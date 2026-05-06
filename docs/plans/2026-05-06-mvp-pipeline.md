@@ -247,15 +247,15 @@ video.mp4
 
 ### Task 10: Speaker identification
 
-- [ ] implement `speakers.identify(stt, frames, provider, manual=None) ->
+- [x] implement `speakers.identify(stt, frames, provider, manual=None) ->
       dict[str, str]` — мапит SPEAKER_00 → 'Иван' / fallback s00
-- [ ] strategy: один LLM-вызов на репрезентативные чанки (по 1-2 на каждого
+- [x] strategy: один LLM-вызов на репрезентативные чанки (по 1-2 на каждого
       SPEAKER_*) с инструкцией извлечь имена
-- [ ] CLI override: `--speakers "Иван,Алиса"` (позиционно по индексу спикеров)
-- [ ] неопознанные → `s00`, `s01` и т.п.
-- [ ] persist `speakers.json` в кэш
-- [ ] write tests с мок-провайдером
-- [ ] run tests
+- [x] CLI override: `--speakers "Иван,Алиса"` (позиционно по индексу спикеров)
+- [x] неопознанные → `s00`, `s01` и т.п.
+- [x] persist `speakers.json` в кэш
+- [x] write tests с мок-провайдером
+- [x] run tests
 
 ### Task 11: Correction loop
 
