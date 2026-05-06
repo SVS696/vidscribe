@@ -534,6 +534,139 @@ def test_frames_returns_absolute_paths_from_relative_cache_dir(tmp_path, mocker,
     assert frame_items[0].path.is_absolute()
 
 
+def test_pipeline_mix_mode_flags_are_parsed_and_passed(tmp_path, mocker) -> None:
+    """--correction-mode mix and related flags are parsed correctly."""
+    runner = CliRunner()
+    video = video_file(tmp_path)
+
+    mocker.patch(
+        "vidscribe.cli._extract",
+        return_value=(tmp_path / "audio.wav", []),
+    )
+    mocker.patch("vidscribe.cli._transcribe_audio", return_value=stt_result())
+    mocker.patch("vidscribe.cli._chunks", return_value=[chunk_item()])
+    provider_mock = mocker.patch("vidscribe.cli.provider.make", return_value=object())
+    mocker.patch(
+        "vidscribe.cli.speakers.identify",
+        return_value={"SPEAKER_00": "Alice"},
+    )
+    correct_mock = mocker.patch(
+        "vidscribe.cli.correct_chunks",
+        return_value=[corrected_item()],
+    )
+    mocker.patch("vidscribe.cli.assembler.assemble", return_value="final")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "pipeline",
+            str(video),
+            "--correction-mode",
+            "mix",
+            "--text-provider",
+            "codex",
+            "--text-model",
+            "gpt-5.5",
+            "--visual-provider",
+            "claude",
+            "--visual-model",
+            "sonnet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # provider.make should be called at least for text and visual providers
+    assert provider_mock.call_count >= 2
+    # correct_chunks should be called with a visual_provider
+    call_kwargs = correct_mock.call_args.kwargs
+    assert call_kwargs.get("visual_provider") is not None
+
+
+def test_correct_mix_mode_flags_are_parsed_and_passed(tmp_path, mocker) -> None:
+    """--correction-mode mix works for the correct command."""
+    runner = CliRunner()
+    video = video_file(tmp_path)
+
+    mocker.patch("vidscribe.cli._cached_model", return_value=stt_result())
+    mocker.patch(
+        "vidscribe.cli._cached_frames",
+        return_value=[],
+    )
+    mocker.patch("vidscribe.cli._chunks", return_value=[chunk_item()])
+    provider_mock = mocker.patch("vidscribe.cli.provider.make", return_value=object())
+    mocker.patch(
+        "vidscribe.cli.speakers.identify",
+        return_value={"SPEAKER_00": "Alice"},
+    )
+    correct_mock = mocker.patch(
+        "vidscribe.cli.correct_chunks",
+        return_value=[corrected_item()],
+    )
+    mocker.patch("vidscribe.cli.assembler.assemble", return_value="corrected")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "correct",
+            str(video),
+            "--correction-mode",
+            "mix",
+            "--text-provider",
+            "codex",
+            "--visual-provider",
+            "claude",
+            "--visual-model",
+            "sonnet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert provider_mock.call_count >= 2
+    call_kwargs = correct_mock.call_args.kwargs
+    assert call_kwargs.get("visual_provider") is not None
+
+
+def test_pipeline_single_mode_does_not_pass_visual_provider(tmp_path, mocker) -> None:
+    """Default single mode must not supply visual_provider to correct_chunks."""
+    runner = CliRunner()
+    video = video_file(tmp_path)
+
+    mocker.patch(
+        "vidscribe.cli._extract",
+        return_value=(tmp_path / "audio.wav", []),
+    )
+    mocker.patch("vidscribe.cli._transcribe_audio", return_value=stt_result())
+    mocker.patch("vidscribe.cli._chunks", return_value=[chunk_item()])
+    mocker.patch("vidscribe.cli.provider.make", return_value=object())
+    mocker.patch(
+        "vidscribe.cli.speakers.identify",
+        return_value={"SPEAKER_00": "Alice"},
+    )
+    correct_mock = mocker.patch(
+        "vidscribe.cli.correct_chunks",
+        return_value=[corrected_item()],
+    )
+    mocker.patch("vidscribe.cli.assembler.assemble", return_value="final")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "pipeline",
+            str(video),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call_kwargs = correct_mock.call_args.kwargs
+    assert call_kwargs.get("visual_provider") is None
+
+
 def test_cache_list_and_clear_for_video(tmp_path) -> None:
     runner = CliRunner()
     video = video_file(tmp_path)

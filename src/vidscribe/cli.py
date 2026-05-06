@@ -13,7 +13,7 @@ from rich.console import Console
 
 from vidscribe import assembler, audio, chunker, frames, provider, speakers, stt
 from vidscribe.cache import Cache
-from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, load_config
+from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, CorrectionMode, load_config
 from vidscribe.frames import FrameInfo
 from vidscribe.pipeline import correct_chunks
 from vidscribe.stt import SttResult
@@ -151,6 +151,26 @@ def pipeline_command(
         bool,
         typer.Option("--no-cache", help="Bypass cache for this run."),
     ] = False,
+    correction_mode: Annotated[
+        CorrectionMode | None,
+        typer.Option("--correction-mode", help="Correction mode: single or mix."),
+    ] = None,
+    text_provider: Annotated[
+        str | None,
+        typer.Option("--text-provider", help="Mix-mode: provider for text-only Pass 1."),
+    ] = None,
+    text_model: Annotated[
+        str | None,
+        typer.Option("--text-model", help="Mix-mode: model for text-only Pass 1."),
+    ] = None,
+    visual_provider: Annotated[
+        str | None,
+        typer.Option("--visual-provider", help="Mix-mode: provider for visual Pass 2."),
+    ] = None,
+    visual_model: Annotated[
+        str | None,
+        typer.Option("--visual-model", help="Mix-mode: model for visual Pass 2."),
+    ] = None,
 ) -> None:
     """Run the full transcription and correction pipeline."""
 
@@ -161,6 +181,11 @@ def pipeline_command(
         whisper_model=whisper_model,
         chunk_strategy=chunk_strategy,
         speakers=_parse_speakers(speaker_names) if speaker_names is not None else None,
+        correction_mode=correction_mode,
+        text_provider=text_provider,
+        text_model=text_model,
+        visual_provider=visual_provider,
+        visual_model=visual_model,
     )
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
@@ -182,6 +207,7 @@ def pipeline_command(
         speaker_map,
         cache,
         namespace_key=video_key,
+        visual_provider=_make_visual_provider(config) if config.correction_mode == "mix" else None,
     )
     transcript = assembler.assemble(corrected, speaker_map)
     output_path = out or video.with_suffix(".md")
@@ -250,10 +276,39 @@ def correct_command(
         bool,
         typer.Option("--no-cache", help="Bypass cache for this run."),
     ] = False,
+    correction_mode: Annotated[
+        CorrectionMode | None,
+        typer.Option("--correction-mode", help="Correction mode: single or mix."),
+    ] = None,
+    text_provider: Annotated[
+        str | None,
+        typer.Option("--text-provider", help="Mix-mode: provider for text-only Pass 1."),
+    ] = None,
+    text_model: Annotated[
+        str | None,
+        typer.Option("--text-model", help="Mix-mode: model for text-only Pass 1."),
+    ] = None,
+    visual_provider: Annotated[
+        str | None,
+        typer.Option("--visual-provider", help="Mix-mode: provider for visual Pass 2."),
+    ] = None,
+    visual_model: Annotated[
+        str | None,
+        typer.Option("--visual-model", help="Mix-mode: model for visual Pass 2."),
+    ] = None,
 ) -> None:
     """Re-run correction from cached STT and frames."""
 
-    config = _command_config(ctx, provider=provider_name, model=model)
+    config = _command_config(
+        ctx,
+        provider=provider_name,
+        model=model,
+        correction_mode=correction_mode,
+        text_provider=text_provider,
+        text_model=text_model,
+        visual_provider=visual_provider,
+        visual_model=visual_model,
+    )
     if no_cache:
         disabled = set(config.no_cache) | _CORRECT_RECOMPUTE_STAGES
         cache = Cache(config.cache_dir, disabled_stages=disabled, console=console)
@@ -278,6 +333,7 @@ def correct_command(
         speaker_map,
         cache,
         namespace_key=video_key,
+        visual_provider=_make_visual_provider(config) if config.correction_mode == "mix" else None,
     )
     transcript = assembler.assemble(corrected, speaker_map)
     output_path = out or video.with_suffix(".md")
@@ -350,8 +406,22 @@ def _command_config(ctx: typer.Context, **overrides: Any) -> AppConfig:
 
 
 def _make_provider(config: AppConfig) -> provider.Provider:
-    opts = {"model": config.model} if config.model is not None else {}
-    return provider.make(config.provider, **opts)
+    """Create the primary (or mix-mode text) provider from config."""
+    if config.correction_mode == "mix":
+        # In mix-mode: text_provider/text_model override provider/model for Pass 1
+        pname = config.text_provider if config.text_provider is not None else config.provider
+        pmodel = config.text_model if config.text_model is not None else config.model
+    else:
+        pname = config.provider
+        pmodel = config.model
+    opts = {"model": pmodel} if pmodel is not None else {}
+    return provider.make(pname, **opts)
+
+
+def _make_visual_provider(config: AppConfig) -> provider.Provider:
+    """Create the mix-mode visual provider (Pass 2) from config."""
+    opts = {"model": config.visual_model}
+    return provider.make(config.visual_provider, **opts)
 
 
 def _validation_message(exc: ValidationError) -> str:

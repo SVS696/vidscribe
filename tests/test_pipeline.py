@@ -295,3 +295,164 @@ def test_correct_chunks_rejects_non_object_json_text() -> None:
             {"SPEAKER_00": "Иван"},
             cache=None,
         )
+
+
+# ---------------------------------------------------------------------------
+# Mix-mode tests
+# ---------------------------------------------------------------------------
+
+TEXT_PAYLOAD = {
+    "corrected_text": "Текст после первого прохода.",
+    "glossary_delta": {"OpenAI": "canonical"},
+    "notes": "",
+}
+
+VISUAL_PAYLOAD = {
+    "corrected_text": "Текст после визуального прохода.",
+    "glossary_delta": {"GPT-5": "model name from screen"},
+    "notes": "Screen shows a dashboard.",
+}
+
+
+def test_mix_mode_calls_text_provider_first_then_visual(tmp_path) -> None:
+    """text_provider is called before visual_provider."""
+    call_order: list[str] = []
+
+    class OrderedTextProvider:
+        model = "text-model"
+
+        def correct(self, prompt, frame_paths, timeout):
+            call_order.append("text")
+            return ProviderResponse(
+                text="",
+                raw_json=TEXT_PAYLOAD,
+                cost_estimate=0.01,
+                duration_s=0.1,
+            )
+
+    class OrderedVisualProvider:
+        model = "visual-model"
+
+        def correct(self, prompt, frame_paths, timeout):
+            call_order.append("visual")
+            return ProviderResponse(
+                text="",
+                raw_json=VISUAL_PAYLOAD,
+                cost_estimate=0.02,
+                duration_s=0.1,
+            )
+
+    correct_chunks(
+        [chunk(0, 0, 5, "SPEAKER_00", "raw")],
+        OrderedTextProvider(),
+        {"SPEAKER_00": "Иван"},
+        cache=None,
+        visual_provider=OrderedVisualProvider(),
+    )
+
+    assert call_order == ["text", "visual"]
+
+
+def test_mix_mode_text_provider_receives_no_frames(tmp_path) -> None:
+    """Pass 1 (text provider) must NOT receive frame_paths."""
+    text_provider = FakeProvider([TEXT_PAYLOAD])
+    visual_provider = FakeProvider([VISUAL_PAYLOAD])
+
+    frame_path = tmp_path / "frame.jpg"
+    frame_path.write_bytes(b"img")
+
+    correct_chunks(
+        [chunk(0, 0, 5, "SPEAKER_00", "raw", frame_paths=[frame_path])],
+        text_provider,
+        {"SPEAKER_00": "Иван"},
+        cache=None,
+        visual_provider=visual_provider,
+    )
+
+    _text_prompt, text_frames, _timeout = text_provider.calls[0]
+    assert text_frames == []
+
+
+def test_mix_mode_visual_provider_receives_frames_and_text_corrected(tmp_path) -> None:
+    """Pass 2 (visual provider) receives frames and Pass-1 corrected text in prompt."""
+    text_provider = FakeProvider([TEXT_PAYLOAD])
+    visual_provider = FakeProvider([VISUAL_PAYLOAD])
+
+    frame_path = (tmp_path / "frame.jpg").resolve()
+    frame_path.write_bytes(b"img")
+
+    correct_chunks(
+        [chunk(0, 0, 5, "SPEAKER_00", "raw text", frame_paths=[frame_path])],
+        text_provider,
+        {"SPEAKER_00": "Иван"},
+        cache=None,
+        visual_provider=visual_provider,
+    )
+
+    visual_prompt, visual_frames, _timeout = visual_provider.calls[0]
+    # Frames must be present
+    assert visual_frames == [frame_path]
+    # Pass-1 corrected text must appear in the prompt
+    assert TEXT_PAYLOAD["corrected_text"] in visual_prompt
+
+
+def test_mix_mode_final_text_comes_from_visual_pass() -> None:
+    """The final corrected_text is the output of Pass 2."""
+    text_provider = FakeProvider([TEXT_PAYLOAD])
+    visual_provider = FakeProvider([VISUAL_PAYLOAD])
+
+    result = correct_chunks(
+        [chunk(0, 0, 5, "SPEAKER_00", "raw")],
+        text_provider,
+        {"SPEAKER_00": "Иван"},
+        cache=None,
+        visual_provider=visual_provider,
+    )
+
+    assert result[0].corrected_text == VISUAL_PAYLOAD["corrected_text"]
+
+
+def test_mix_mode_glossary_delta_merges_both_passes() -> None:
+    """glossary_delta from both passes are merged in the result."""
+    text_provider = FakeProvider([TEXT_PAYLOAD])
+    visual_provider = FakeProvider([VISUAL_PAYLOAD])
+
+    result = correct_chunks(
+        [chunk(0, 0, 5, "SPEAKER_00", "raw")],
+        text_provider,
+        {"SPEAKER_00": "Иван"},
+        cache=None,
+        visual_provider=visual_provider,
+    )
+
+    assert "OpenAI" in result[0].glossary_delta  # from text pass
+    assert "GPT-5" in result[0].glossary_delta  # from visual pass
+
+
+def test_mix_mode_cache_key_differs_from_single_mode(tmp_path) -> None:
+    """Cache keys for mix and single modes must not collide."""
+    cache = Cache(tmp_path)
+    chunks_list = [chunk(0, 0, 5, "SPEAKER_00", "raw")]
+
+    single_provider = FakeProvider([{"corrected_text": "single", "glossary_delta": {}, "notes": ""}])
+    correct_chunks(
+        chunks_list,
+        single_provider,
+        {"SPEAKER_00": "Иван"},
+        cache,
+    )
+
+    # mix-mode run — should NOT hit the single-mode cache entry
+    mix_text = FakeProvider([TEXT_PAYLOAD])
+    mix_visual = FakeProvider([VISUAL_PAYLOAD])
+    result = correct_chunks(
+        chunks_list,
+        mix_text,
+        {"SPEAKER_00": "Иван"},
+        cache,
+        visual_provider=mix_visual,
+    )
+
+    # visual provider was actually called (cache was not shared)
+    assert len(mix_visual.calls) == 1
+    assert result[0].corrected_text == VISUAL_PAYLOAD["corrected_text"]
