@@ -232,6 +232,16 @@ def test_provider_raises_for_invalid_json(mocker) -> None:
         CodexCLIProvider().correct("prompt", frame_paths=[], timeout=10)
 
 
+def test_codex_provider_raises_when_output_last_message_missing(mocker) -> None:
+    mocker.patch(
+        "vidscribe.provider.subprocess.run",
+        return_value=completed('{"event": "done"}'),
+    )
+
+    with pytest.raises(ProviderError, match="output-last-message file"):
+        CodexCLIProvider().correct("prompt", frame_paths=[], timeout=10)
+
+
 def test_provider_raises_helpful_error_when_binary_missing(mocker) -> None:
     mocker.patch(
         "vidscribe.provider.subprocess.run",

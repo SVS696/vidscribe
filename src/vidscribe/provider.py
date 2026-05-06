@@ -176,6 +176,8 @@ def _run_codex_provider(command: list[str], timeout: int) -> ProviderResponse:
             cwd=Path(temp_dir),
             parse_stdout=False,
         )
+        if not output_path.exists():
+            raise ProviderError("codex did not create an output-last-message file.")
         output_text = output_path.read_text(encoding="utf-8").strip()
         if not output_text:
             raise ProviderError("codex did not write an output-last-message.")

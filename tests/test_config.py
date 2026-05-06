@@ -12,7 +12,7 @@ def test_app_config_defaults() -> None:
     config = AppConfig()
 
     assert config.provider == "codex"
-    assert config.model == "gpt-5.5"
+    assert config.model is None
     assert config.chunk_strategy == "speaker"
     assert config.frame_rate == 0.1
     assert config.whisper_model == "noscribe-precise"

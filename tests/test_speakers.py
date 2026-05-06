@@ -94,7 +94,9 @@ def test_provider_text_json_is_accepted() -> None:
 
 
 def test_manual_mapping_by_speaker_id_overrides_provider() -> None:
-    provider = FakeProvider(raw_json={"speakers": {"SPEAKER_00": "Иван"}})
+    provider = FakeProvider(
+        raw_json={"speakers": {"SPEAKER_00": "Иван", "SPEAKER_01": "Wrong"}}
+    )
 
     speakers = identify(
         stt_result(),

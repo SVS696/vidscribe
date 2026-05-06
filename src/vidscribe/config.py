@@ -31,7 +31,7 @@ class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: ProviderName = "codex"
-    model: str = "gpt-5.5"
+    model: str | None = None
     chunk_strategy: ChunkStrategy = "speaker"
     frame_rate: float = Field(default=0.1, gt=0)
     whisper_model: str = "noscribe-precise"

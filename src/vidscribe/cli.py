@@ -167,7 +167,7 @@ def pipeline_command(
     audio_path, frame_items = _extract(video, config, cache, video_key)
     stt_result = _transcribe_audio(audio_path, config, cache, video_key)
     chunk_items = _chunks(stt_result, frame_items, config, cache, video_key)
-    cli_provider = provider.make(config.provider, model=config.model)
+    cli_provider = _make_provider(config)
     speaker_map = speakers.identify(
         stt_result,
         frame_items,
@@ -263,7 +263,7 @@ def correct_command(
     stt_result = _cached_model(cache, "stt", video_key, SttResult)
     frame_items = _cached_frames(cache, video_key)
     chunk_items = _chunks(stt_result, frame_items, config, cache, video_key)
-    cli_provider = provider.make(config.provider, model=config.model)
+    cli_provider = _make_provider(config)
     speaker_map = speakers.identify(
         stt_result,
         frame_items,
@@ -347,6 +347,11 @@ def _command_config(ctx: typer.Context, **overrides: Any) -> AppConfig:
         return AppConfig.model_validate(config.model_dump() | compact)
     except ValidationError as exc:
         raise typer.BadParameter(_validation_message(exc)) from exc
+
+
+def _make_provider(config: AppConfig) -> provider.Provider:
+    opts = {"model": config.model} if config.model is not None else {}
+    return provider.make(config.provider, **opts)
 
 
 def _validation_message(exc: ValidationError) -> str:

@@ -111,6 +111,40 @@ def test_pipeline_command_wires_full_run_with_command_overrides(
     transcribe_mock.assert_called_once()
 
 
+def test_pipeline_uses_provider_default_model_when_model_unset(tmp_path, mocker) -> None:
+    runner = CliRunner()
+    video = video_file(tmp_path)
+
+    mocker.patch(
+        "vidscribe.cli._extract",
+        return_value=(tmp_path / "audio.wav", []),
+    )
+    mocker.patch("vidscribe.cli._transcribe_audio", return_value=stt_result())
+    mocker.patch("vidscribe.cli._chunks", return_value=[chunk_item()])
+    provider_mock = mocker.patch("vidscribe.cli.provider.make", return_value=object())
+    mocker.patch(
+        "vidscribe.cli.speakers.identify",
+        return_value={"SPEAKER_00": "Alice"},
+    )
+    mocker.patch("vidscribe.cli.correct_chunks", return_value=[corrected_item()])
+    mocker.patch("vidscribe.cli.assembler.assemble", return_value="final")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "pipeline",
+            str(video),
+            "--provider",
+            "claude",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    provider_mock.assert_called_once_with("claude")
+
+
 def test_pipeline_rejects_unknown_provider_before_expensive_work(tmp_path, mocker) -> None:
     runner = CliRunner()
     video = video_file(tmp_path)

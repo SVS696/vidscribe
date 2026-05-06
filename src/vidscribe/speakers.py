@@ -66,7 +66,7 @@ def identify(
     )
     response = provider.correct(prompt, frame_paths=frame_paths, timeout=timeout)
     provider_map = _provider_speaker_map(response.raw_json, response.text)
-    speaker_map = _finalize(speaker_ids, manual_map | provider_map)
+    speaker_map = _finalize(speaker_ids, provider_map | manual_map)
 
     if cache is not None and cache_key is not None:
         cache.set("speakers", cache_key, speaker_map)
