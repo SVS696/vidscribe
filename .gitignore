@@ -9,6 +9,8 @@ htmlcov/
 dist/
 build/
 .ruff_cache/
+.ralphex-logs/
+.ralphex/
 
 # fixtures: keep tiny ones, ignore big
 tests/fixtures/*.mp4
