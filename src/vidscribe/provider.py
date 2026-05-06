@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
-from base64 import b64encode
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -209,56 +205,10 @@ def _run_ollama_provider(
     frame_paths: list[Path],
     timeout: int,
 ) -> ProviderResponse:
-    started = time.monotonic()
-    payload: dict[str, Any] = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-    }
-    if frame_paths:
-        try:
-            payload["images"] = [
-                b64encode(path.resolve().read_bytes()).decode("ascii")
-                for path in frame_paths
-            ]
-        except OSError as exc:
-            raise ProviderError(f"Could not read Ollama image input: {exc}") from exc
-
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        _ollama_generate_url(),
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            response_text = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        details = exc.read().decode("utf-8", errors="replace").strip()
-        message = f"ollama API exited with status {exc.code}"
-        if details:
-            message = f"{message}: {details}"
-        raise ProviderError(message) from exc
-    except urllib.error.URLError as exc:
-        raise ProviderError(f"ollama API request failed: {exc.reason}") from exc
-    except TimeoutError as exc:
-        raise ProviderError(f"ollama API timed out after {timeout} seconds.") from exc
-
-    raw_json = _parse_provider_json(response_text)
-    return ProviderResponse(
-        text=_response_text(raw_json),
-        raw_json=raw_json,
-        cost_estimate=_cost_estimate(raw_json),
-        duration_s=time.monotonic() - started,
-    )
-
-
-def _ollama_generate_url() -> str:
-    host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").strip().rstrip("/")
-    if not host.startswith(("http://", "https://")):
-        host = f"http://{host}"
-    return f"{host}/api/generate"
+    command = ["ollama", "run", model]
+    command.extend(str(path.resolve()) for path in frame_paths)
+    command.append(prompt)
+    return _run_provider(command, timeout=timeout)
 
 
 def _run_provider_in_cwd(
