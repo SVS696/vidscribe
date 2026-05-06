@@ -62,6 +62,7 @@ def correct_chunks(
                 cache,
                 chunk,
                 provider,
+                speakers,
                 glossary_snapshot,
                 namespace_key=namespace_key,
             )
@@ -123,6 +124,7 @@ def _cache_key(
     cache: Cache | None,
     chunk: Chunk,
     provider: Provider,
+    speakers: Mapping[str, str],
     glossary_snapshot: Mapping[str, str],
     *,
     namespace_key: str | None = None,
@@ -134,6 +136,7 @@ def _cache_key(
         chunk=chunk,
         provider=provider.__class__.__name__,
         model=getattr(provider, "model", None),
+        speakers=dict(speakers),
         glossary_snapshot=dict(glossary_snapshot),
     )
     if namespace_key is None:

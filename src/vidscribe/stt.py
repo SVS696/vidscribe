@@ -245,15 +245,18 @@ def merge_asr_diar(asr: AsrResult, diar: DiarResult) -> SttResult:
             )
             for word in segment.words
         ]
-        segments.append(
-            SttSegment(
-                start=segment.start,
-                end=segment.end,
-                text=segment.text,
-                speaker=_mode_speaker(words),
-                words=words,
+        if words:
+            segments.extend(_speaker_runs(words))
+        else:
+            segments.append(
+                SttSegment(
+                    start=segment.start,
+                    end=segment.end,
+                    text=segment.text,
+                    speaker=_speaker_for_interval(segment.start, segment.end, diar.turns),
+                    words=[],
+                )
             )
-        )
 
     return SttResult(segments=segments, language=asr.language, model=asr.model)
 
@@ -375,3 +378,32 @@ def _mode_speaker(words: list[SttWord]) -> str | None:
     if not counts:
         return None
     return max(counts, key=counts.get)
+
+
+def _speaker_runs(words: list[SttWord]) -> list[SttSegment]:
+    runs: list[SttSegment] = []
+    current: list[SttWord] = []
+    current_speaker: str | None = None
+
+    for word in words:
+        if current and word.speaker != current_speaker:
+            runs.append(_segment_from_words(current, current_speaker))
+            current = []
+        current.append(word)
+        current_speaker = word.speaker
+
+    if current:
+        runs.append(_segment_from_words(current, current_speaker))
+
+    return runs
+
+
+def _segment_from_words(words: list[SttWord], speaker: str | None) -> SttSegment:
+    text = " ".join(word.word.strip() for word in words if word.word.strip())
+    return SttSegment(
+        start=words[0].start,
+        end=words[-1].end,
+        text=text,
+        speaker=speaker,
+        words=words,
+    )

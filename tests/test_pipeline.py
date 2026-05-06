@@ -151,6 +151,21 @@ def test_correct_chunks_caches_each_chunk_with_glossary_snapshot(tmp_path) -> No
     assert second_provider.calls == []
 
 
+def test_correct_chunks_cache_key_includes_speaker_map(tmp_path) -> None:
+    cache = Cache(tmp_path)
+    chunks = [chunk(0, 0, 5, "SPEAKER_00", "сырой текст")]
+    first_provider = FakeProvider([{"corrected_text": "Иван говорит"}])
+    second_provider = FakeProvider([{"corrected_text": "Алиса говорит"}])
+
+    first = correct_chunks(chunks, first_provider, {"SPEAKER_00": "Иван"}, cache)
+    second = correct_chunks(chunks, second_provider, {"SPEAKER_00": "Алиса"}, cache)
+
+    assert [item.corrected_text for item in first] == ["Иван говорит"]
+    assert [item.corrected_text for item in second] == ["Алиса говорит"]
+    assert len(second_provider.calls) == 1
+    assert "SPEAKER_00 (Алиса): сырой текст" in second_provider.calls[0][0]
+
+
 def test_correct_chunks_can_namespace_cache_under_video_key(tmp_path) -> None:
     cache = Cache(tmp_path)
     provider = FakeProvider([{"corrected_text": "Fixed"}])

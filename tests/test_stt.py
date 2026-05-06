@@ -14,6 +14,7 @@ from vidscribe.stt import (
     DiarResult,
     DiarTurn,
     STTAssetError,
+    SttSegment,
     SttWord,
 )
 
@@ -296,7 +297,7 @@ def test_diarize_falls_back_to_hugging_face_when_assets_missing(
     assert result == DiarResult(turns=[])
 
 
-def test_merge_asr_diar_assigns_words_by_max_overlap_and_segment_mode() -> None:
+def test_merge_asr_diar_splits_asr_segments_on_speaker_changes() -> None:
     asr = AsrResult(
         model="large-v3",
         language="ru",
@@ -327,12 +328,31 @@ def test_merge_asr_diar_assigns_words_by_max_overlap_and_segment_mode() -> None:
 
     assert result.language == "ru"
     assert result.model == "large-v3"
-    assert result.segments[0].speaker == "SPEAKER_01"
-    assert result.segments[0].words == [
-        SttWord(start=0.0, end=1.0, word="one", speaker="SPEAKER_00"),
-        SttWord(start=1.0, end=2.0, word="two", speaker="SPEAKER_01"),
-        SttWord(start=2.0, end=3.0, word="three", speaker="SPEAKER_01"),
-        SttWord(start=3.1, end=3.5, word="four", speaker=None),
+    assert result.segments == [
+        SttSegment(
+            start=0.0,
+            end=1.0,
+            text="one",
+            speaker="SPEAKER_00",
+            words=[SttWord(start=0.0, end=1.0, word="one", speaker="SPEAKER_00")],
+        ),
+        SttSegment(
+            start=1.0,
+            end=3.0,
+            text="two three",
+            speaker="SPEAKER_01",
+            words=[
+                SttWord(start=1.0, end=2.0, word="two", speaker="SPEAKER_01"),
+                SttWord(start=2.0, end=3.0, word="three", speaker="SPEAKER_01"),
+            ],
+        ),
+        SttSegment(
+            start=3.1,
+            end=3.5,
+            text="four",
+            speaker=None,
+            words=[SttWord(start=3.1, end=3.5, word="four", speaker=None)],
+        ),
     ]
 
 
