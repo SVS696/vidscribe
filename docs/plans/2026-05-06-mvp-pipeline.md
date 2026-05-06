@@ -137,26 +137,26 @@ video.mp4
 
 ### Task 4: faster-whisper STT (с реюзом noScribe-весов)
 
-- [ ] implement `stt.detect_assets() -> AssetPaths` — ищет noScribe бандл по
+- [x] implement `stt.detect_assets() -> AssetPaths` — ищет noScribe бандл по
       пути `/Applications/noScribe.app/Contents/Resources/`, возвращает
       whisper_precise_dir + whisper_fast_dir + pyannote_dir + config_yaml +
       segmentation_path + embedding_path; иначе None
-- [ ] implement `stt.transcribe(audio_path, model='noscribe-precise', device='auto',
+- [x] implement `stt.transcribe(audio_path, model='noscribe-precise', device='auto',
       language='ru') -> AsrResult`:
   - `noscribe-precise` (default) → faster-whisper грузит из
     `/Applications/noScribe.app/Contents/Resources/models/precise/`
   - `noscribe-fast` → из `models/fast/`
   - `large-v3` / `medium` / etc → стандартный download через faster-whisper +
     `HF_HOME` cache
-- [ ] вызов: `WhisperModel(model_path, device=..., compute_type='int8')` →
+- [x] вызов: `WhisperModel(model_path, device=..., compute_type='int8')` →
       `model.transcribe(audio, language='ru', word_timestamps=True,
       vad_filter=True)` → AsrSegment[] с words[]
-- [ ] auto-detect device: cuda > cpu (mps пока не поддерживается ctranslate2)
-- [ ] на macOS принудительно `compute_type='int8'` (Accelerate-friendly)
-- [ ] output `AsrResult` (segments, words) to JSON
-- [ ] write tests с моком faster-whisper + integration-test (skip если
+- [x] auto-detect device: cuda > cpu (mps пока не поддерживается ctranslate2)
+- [x] на macOS принудительно `compute_type='int8'` (Accelerate-friendly)
+- [x] output `AsrResult` (segments, words) to JSON
+- [x] write tests с моком faster-whisper + integration-test (skip если
       noScribe бандл отсутствует)
-- [ ] run tests
+- [x] run tests
 
 ### Task 4b: Pyannote diarization + word-speaker mapping
 
