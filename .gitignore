@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.egg-info/
+*.pyc
+.vidscribe/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.ruff_cache/
+
+# fixtures: keep tiny ones, ignore big
+tests/fixtures/*.mp4
+tests/fixtures/*.wav
+!tests/fixtures/short.mp4
+
+# editor
+.vscode/
+.idea/
+*.swp
