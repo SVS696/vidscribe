@@ -214,16 +214,16 @@ video.mp4
 
 ### Task 8: Prompt templates
 
-- [ ] create `src/vidscribe/prompts/correct_chunk.md` — system prompt + slots
+- [x] create `src/vidscribe/prompts/correct_chunk.md` — system prompt + slots
       for transcript, frame paths, glossary, speaker map, JSON schema
-- [ ] create `src/vidscribe/prompts/identify_speakers.md` — поиск имён по
+- [x] create `src/vidscribe/prompts/identify_speakers.md` — поиск имён по
       транскрипту (паттерны «Привет, X», «X, расскажи») и по кадрам (имена
       на лоу-терах в Zoom/Teams)
-- [ ] implement `prompts.render(name, **kwargs)` через jinja2
-- [ ] enforce JSON output instruction (`{"corrected_text": "...",
+- [x] implement `prompts.render(name, **kwargs)` через jinja2
+- [x] enforce JSON output instruction (`{"corrected_text": "...",
       "glossary_delta": {...}, "notes": "..."}`)
-- [ ] write tests for rendering + missing-slot detection
-- [ ] run tests
+- [x] write tests for rendering + missing-slot detection
+- [x] run tests
 
 ### Task 9: Provider abstraction (CLI subprocess)
 
