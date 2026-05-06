@@ -311,11 +311,11 @@ video.mp4
 
 ### Task 15: Skill wrapper
 
-- [ ] create `~/.claude/skills/vidscribe/SKILL.md` с триггерами «распознай
+- [x] create `~/.claude/skills/vidscribe/SKILL.md` с триггерами «распознай
       видео», «транскрибируй запись», «video transcription»
-- [ ] document common flags + provider selection guide (когда claude/codex/ollama)
-- [ ] add 3-5 example invocations
-- [ ] note: skill вызывает CLI `vidscribe`, никакой логики в скиле быть не должно
+- [x] document common flags + provider selection guide (когда claude/codex/ollama)
+- [x] add 3-5 example invocations
+- [x] note: skill вызывает CLI `vidscribe`, никакой логики в скиле быть не должно
 
 ### Task 16: Documentation
 
