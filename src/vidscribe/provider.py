@@ -65,7 +65,7 @@ class ClaudeCLIProvider:
             "--no-session-persistence",
             "--strict-mcp-config",
             "--mcp-config",
-            "{}",
+            '{"mcpServers":{}}',
             "--permission-mode",
             "dontAsk",
             "--tools",

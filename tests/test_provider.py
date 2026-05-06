@@ -62,7 +62,7 @@ def test_claude_provider_runs_expected_command(mocker) -> None:
             "--no-session-persistence",
             "--strict-mcp-config",
             "--mcp-config",
-            "{}",
+            '{"mcpServers":{}}',
             "--permission-mode",
             "dontAsk",
             "--tools",
