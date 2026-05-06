@@ -2,9 +2,12 @@
 
 Локальное распознавание видео с LLM-корректировкой через CLI-провайдеров.
 
-Заменяет связку **noScribe + Gemini** на полностью контролируемый pipeline:
-ffmpeg → faster-whisper (STT) + pyannote (diarization) → ключевые кадры →
-CLI-провайдер (claude/codex/ollama) → выровненный markdown.
+Заменяет связку **[noScribe](https://github.com/kaixxx/noScribe) + Gemini** на
+полностью контролируемый pipeline:
+[ffmpeg](https://ffmpeg.org/) →
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper) (STT) +
+[pyannote.audio](https://github.com/pyannote/pyannote-audio) (diarization) →
+ключевые кадры → CLI-провайдер (claude / codex / ollama) → выровненный markdown.
 
 ## Зачем
 
@@ -13,16 +16,33 @@ CLI-провайдер (claude/codex/ollama) → выровненный markdown
 - **Локальная транскрипция** через faster-whisper (large-v3 из noScribe.app,
   word-level timestamps) + pyannote diarization напрямую — без HF-токена,
   без лишних alignment-моделей.
-- **CLI-провайдеры вместо API** — биллинг через подписки, как у ralphex:
+- **CLI-провайдеры вместо API** — биллинг через подписки:
   `claude -p`, `codex exec`, `ollama run`.
+- **Mix-режим** — текст полирует один провайдер (codex), визуальные правки
+  делает другой (claude через Read tool на кадрах). Объединяет сильные стороны.
 - **Кэш по этапам** — переиграть только correction с другой моделью без
-  перезапуска STT.
+  перезапуска STT (~5 минут на 8 минут видео).
+
+## Зависимости
+
+| Компонент | Зачем | Ссылка |
+|-----------|-------|--------|
+| **Python 3.11+** | Runtime | <https://www.python.org/> |
+| **ffmpeg** | Извлечение аудио + кадры | <https://ffmpeg.org/> |
+| **faster-whisper** | STT (CTranslate2 backend) | <https://github.com/SYSTRAN/faster-whisper> |
+| **pyannote.audio** | Speaker diarization | <https://github.com/pyannote/pyannote-audio> |
+| **soundfile** | Pre-load audio for pyannote | <https://github.com/bastibe/python-soundfile> |
+| **rich** | Прогресс-бары + цветной вывод | <https://github.com/Textualize/rich> |
+| **Typer** | CLI | <https://typer.tiangolo.com/> |
+| **noScribe.app** *(опц.)* | Готовые модели whisper + pyannote | <https://github.com/kaixxx/noScribe> |
+| **Claude Code CLI** *(опц.)* | Multimodal correction provider | <https://docs.claude.com/en/docs/claude-code> |
+| **Codex CLI** *(опц.)* | Text correction provider | <https://github.com/openai/codex> |
+| **Ollama** *(опц.)* | Локальная multimodal correction | <https://ollama.com/> |
 
 ## Status
 
-MVP pipeline реализован: extraction, STT + diarization, keyframes, chunking,
-speaker identification, correction loop, final assembly and cache management.
-План разработки: `docs/plans/2026-05-06-mvp-pipeline.md`.
+MVP pipeline реализован, mix-mode добавлен, 114 unit-тестов зелёные.
+План разработки: `docs/plans/completed/2026-05-06-mvp-pipeline.md`.
 
 ## Installation
 
@@ -182,17 +202,37 @@ vidscribe pipeline recording.mp4 --whisper-model large-v3
 ## Providers
 
 The provider is invoked as a subprocess; vidscribe does not use provider SDKs or
-store API keys.
+store API keys. Auth относится к глобальной CLI provider'a.
 
-- `claude`: runs `claude -p PROMPT --output-format json --max-turns 1`, plus
-  `--model MODEL` when configured
-- `codex`: runs `codex exec --json ...` from an isolated temporary working
-  directory
-- `ollama`: runs `ollama run MODEL ...`
+| Provider | Multimodal | Команда | Где взять auth |
+|----------|------------|---------|----------------|
+| `claude` | ✅ через Read tool | `claude -p ... --output-format json` | <https://docs.claude.com/en/docs/claude-code> |
+| `codex` | ❌ только текст | `codex exec --json ...` | <https://github.com/openai/codex> |
+| `ollama` | ✅ нативно (qwen-vl) | `ollama run MODEL ...` | <https://ollama.com/> (локально, бесплатно) |
 
 The correction prompt requires a JSON object with `corrected_text`,
 `glossary_delta`, and `notes`. Provider stdout is parsed and normalized before
 the final transcript is assembled.
+
+### Mix-mode (recommended for screen recordings)
+
+Two-pass correction: текст полирует один провайдер, визуал — другой:
+
+```bash
+vidscribe pipeline VIDEO \
+  --correction-mode mix \
+  --text-provider codex --text-model gpt-5.5 \
+  --visual-provider claude --visual-model sonnet \
+  --out transcript.md
+```
+
+Pass 1 (codex): чистит ASR-ошибки в речи, без кадров.
+Pass 2 (claude): открывает каждый кадр через Read tool и уточняет ТОЛЬКО
+on-screen числа, имена, термины, названия колонок. Не переписывает речь.
+
+Полезно для записей экрана/демо, где важны точные значения с UI (числа в
+ячейках Excel, названия колонок, лейблы кнопок). Стоит вдвое больше LLM-вызовов
+на чанк, но ~70% дешевле claude-only за счёт codex-pass.
 
 ## Troubleshooting
 
@@ -235,3 +275,16 @@ cached STT and frame artifacts.
 ## Architecture
 
 See `docs/architecture.md` for the pipeline diagram and artifact layout.
+
+## Contributing
+
+Issues / PRs welcome. Workflow:
+
+```bash
+.venv/bin/pytest -q       # 114 passing
+.venv/bin/ruff check      # lint clean
+```
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
