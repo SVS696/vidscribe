@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ChunkStrategy = Literal["speaker", "time", "scene"]
 ProviderName = Literal["claude", "codex", "ollama"]
+CorrectionMode = Literal["single", "mix"]
 CacheStage = Literal[
     "audio",
     "frames",
@@ -40,8 +41,13 @@ class AppConfig(BaseModel):
     cache_dir: Path = Path(".vidscribe")
     no_cache: tuple[CacheStage, ...] = ()
     speakers: tuple[str, ...] = ()
+    correction_mode: CorrectionMode = "single"
+    text_provider: ProviderName | None = None
+    text_model: str | None = None
+    visual_provider: ProviderName = "claude"
+    visual_model: str = "sonnet"
 
-    @field_validator("provider", mode="before")
+    @field_validator("provider", "text_provider", "visual_provider", mode="before")
     @classmethod
     def normalize_provider(cls, value: Any) -> Any:
         if isinstance(value, str):

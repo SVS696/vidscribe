@@ -58,8 +58,14 @@ def correct_chunks(
     namespace_key: str | None = None,
     timeout: int = 300,
     console: Console | None = None,
+    visual_provider: Provider | None = None,
 ) -> list[CorrectedChunk]:
-    """Correct chunks sequentially while accumulating glossary deltas."""
+    """Correct chunks sequentially while accumulating glossary deltas.
+
+    When ``visual_provider`` is supplied the correction runs in two passes:
+    Pass 1 uses ``provider`` for text-only speech corrections; Pass 2 uses
+    ``visual_provider`` to apply visual context from frames.
+    """
 
     glossary: dict[str, str] = {}
     corrected: list[CorrectedChunk] = []
@@ -76,10 +82,22 @@ def correct_chunks(
                 speakers,
                 glossary_snapshot,
                 namespace_key=namespace_key,
+                visual_provider=visual_provider,
             )
             cached = cache.get("corrected", cache_key) if cache and cache_key else None
             if cached is not None:
                 corrected_chunk = CorrectedChunk.model_validate(cached)
+            elif visual_provider is not None:
+                corrected_chunk = _correct_chunk_mix(
+                    chunk=chunk,
+                    text_provider=provider,
+                    visual_provider=visual_provider,
+                    speakers=speakers,
+                    glossary=glossary_snapshot,
+                    timeout=timeout,
+                )
+                if cache is not None and cache_key is not None:
+                    cache.set("corrected", cache_key, corrected_chunk)
             else:
                 corrected_chunk = _correct_chunk(
                     chunk=chunk,
@@ -96,6 +114,76 @@ def correct_chunks(
             progress.advance(task_id)
 
     return corrected
+
+
+def _correct_chunk_mix(
+    *,
+    chunk: Chunk,
+    text_provider: Provider,
+    visual_provider: Provider,
+    speakers: Mapping[str, str],
+    glossary: Mapping[str, str],
+    timeout: int,
+) -> CorrectedChunk:
+    """Two-pass mix-mode correction: text-only pass then visual-context pass."""
+
+    # Pass 1: text correction (no frames)
+    frame_paths = [path.resolve() for path in chunk.frame_paths]
+    text_prompt = render(
+        "correct_chunk_text",
+        transcript=_chunk_transcript(chunk, speakers),
+        glossary=dict(glossary),
+        speaker_map=dict(speakers),
+    )
+    text_response = text_provider.correct(text_prompt, frame_paths=[], timeout=timeout)
+    text_payload = _correction_payload(text_response)
+    text_segments = _corrected_segments(text_payload, chunk)
+    text_corrected = _joined_corrected_text(text_segments) or _string_value(
+        text_payload, "corrected_text", required=True
+    )
+
+    # Pass 2: visual correction (receives frames + both transcripts)
+    visual_prompt = render(
+        "correct_chunk_visual",
+        asr_transcript=_chunk_transcript(chunk, speakers),
+        text_corrected_transcript=text_corrected,
+        frame_paths=[str(path) for path in frame_paths],
+        glossary=dict(glossary),
+        speaker_map=dict(speakers),
+    )
+    visual_response = visual_provider.correct(
+        visual_prompt, frame_paths=frame_paths, timeout=timeout
+    )
+    visual_payload = _correction_payload(visual_response)
+    visual_segments = _corrected_segments(visual_payload, chunk)
+    final_text = _joined_corrected_text(visual_segments) or _string_value(
+        visual_payload, "corrected_text", required=True
+    )
+
+    # Merge glossary deltas from both passes
+    merged_glossary = _string_dict(text_payload.get("glossary_delta", {}))
+    merged_glossary.update(_string_dict(visual_payload.get("glossary_delta", {})))
+
+    total_cost: float | None = None
+    if text_response.cost_estimate is not None or visual_response.cost_estimate is not None:
+        total_cost = (text_response.cost_estimate or 0.0) + (
+            visual_response.cost_estimate or 0.0
+        )
+
+    return CorrectedChunk(
+        idx=chunk.idx,
+        start=chunk.start,
+        end=chunk.end,
+        speaker=_chunk_speaker(chunk),
+        corrected_text=final_text,
+        segments=visual_segments,
+        glossary_delta=merged_glossary,
+        notes=_string_value(visual_payload, "notes", required=False),
+        raw_json=visual_response.raw_json,
+        cost_estimate=total_cost,
+        duration_s=text_response.duration_s + visual_response.duration_s,
+        frame_paths=frame_paths,
+    )
 
 
 def _correct_chunk(
@@ -144,6 +232,7 @@ def _cache_key(
     glossary_snapshot: Mapping[str, str],
     *,
     namespace_key: str | None = None,
+    visual_provider: Provider | None = None,
 ) -> str | None:
     if cache is None:
         return None
@@ -152,6 +241,9 @@ def _cache_key(
         chunk=chunk,
         provider=provider.__class__.__name__,
         model=getattr(provider, "model", None),
+        visual_provider=visual_provider.__class__.__name__ if visual_provider is not None else None,
+        visual_model=getattr(visual_provider, "model", None) if visual_provider is not None else None,
+        correction_mode="mix" if visual_provider is not None else "single",
         speakers=dict(speakers),
         glossary_snapshot=dict(glossary_snapshot),
     )
