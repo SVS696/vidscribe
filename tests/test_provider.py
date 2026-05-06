@@ -52,7 +52,8 @@ def test_claude_provider_runs_expected_command(mocker) -> None:
         [
             "claude",
             "-p",
-            "prompt",
+            "--input-format",
+            "text",
             "--output-format",
             "json",
             "--max-turns",
@@ -74,6 +75,7 @@ def test_claude_provider_runs_expected_command(mocker) -> None:
         ],
         capture_output=True,
         text=True,
+        input="prompt",
         timeout=30,
         check=False,
         cwd=ANY,
@@ -118,9 +120,8 @@ def test_codex_provider_reads_output_last_message(mocker) -> None:
         "--output-last-message",
         ANY,
     ]
-    assert command[17:] == [
-        "prompt",
-    ]
+    assert command[17:] == ["-"]
+    assert run.call_args.kwargs["input"] == "prompt"
     assert run.call_args.kwargs["cwd"].name.startswith("vidscribe-provider-")
 
 
@@ -154,7 +155,7 @@ def test_claude_provider_deduplicates_frame_parent_dirs(mocker) -> None:
     assert command.count(str(first.resolve().parent)) == 1
 
 
-def test_ollama_provider_passes_frame_paths(mocker) -> None:
+def test_ollama_provider_sends_prompt_on_stdin_without_frame_args(mocker) -> None:
     run = mocker.patch(
         "vidscribe.provider.subprocess.run",
         return_value=completed('{"response": "local"}'),
@@ -172,10 +173,8 @@ def test_ollama_provider_passes_frame_paths(mocker) -> None:
         "ollama",
         "run",
         "qwen2-vl:7b",
-        "prompt",
-        "/tmp/a.jpg",
-        "/tmp/b.jpg",
     ]
+    assert run.call_args.kwargs["input"] == "prompt"
     assert run.call_args.kwargs["cwd"] is None
 
 

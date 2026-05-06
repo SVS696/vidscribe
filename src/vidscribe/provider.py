@@ -52,7 +52,8 @@ class ClaudeCLIProvider:
         command = [
             "claude",
             "-p",
-            prompt,
+            "--input-format",
+            "text",
             "--output-format",
             "json",
             "--max-turns",
@@ -74,7 +75,7 @@ class ClaudeCLIProvider:
         if allowed_dirs:
             command.append("--add-dir")
             command.extend(str(path) for path in allowed_dirs)
-        return _run_isolated_provider(command, timeout=timeout)
+        return _run_isolated_provider(command, timeout=timeout, input_text=prompt)
 
 
 @dataclass(frozen=True)
@@ -104,8 +105,7 @@ class CodexCLIProvider:
             command.extend(["--model", self.model])
         for frame_path in frame_paths:
             command.extend(["--image", str(frame_path.resolve())])
-        command.append(prompt)
-        return _run_codex_provider(command, timeout=timeout)
+        return _run_codex_provider(command, timeout=timeout, input_text=prompt)
 
 
 @dataclass(frozen=True)
@@ -120,9 +120,8 @@ class OllamaProvider:
         frame_paths: list[Path],
         timeout: int,
     ) -> ProviderResponse:
-        command = ["ollama", "run", self.model, prompt]
-        command.extend(str(path) for path in frame_paths)
-        return _run_provider(command, timeout=timeout)
+        command = ["ollama", "run", self.model]
+        return _run_provider(command, timeout=timeout, input_text=prompt)
 
 
 def make(name: str, **opts: Any) -> Provider:
@@ -150,31 +149,42 @@ def _parent_dirs(paths: list[Path]) -> list[Path]:
     return dirs
 
 
-def _run_provider(command: list[str], timeout: int) -> ProviderResponse:
-    return _run_provider_in_cwd(command, timeout=timeout, cwd=None)
+def _run_provider(
+    command: list[str], timeout: int, input_text: str | None = None
+) -> ProviderResponse:
+    return _run_provider_in_cwd(
+        command, timeout=timeout, cwd=None, input_text=input_text
+    )
 
 
-def _run_isolated_provider(command: list[str], timeout: int) -> ProviderResponse:
+def _run_isolated_provider(
+    command: list[str], timeout: int, input_text: str | None = None
+) -> ProviderResponse:
     with tempfile.TemporaryDirectory(prefix="vidscribe-provider-") as temp_dir:
-        return _run_provider_in_cwd(command, timeout=timeout, cwd=Path(temp_dir))
+        return _run_provider_in_cwd(
+            command, timeout=timeout, cwd=Path(temp_dir), input_text=input_text
+        )
 
 
-def _run_codex_provider(command: list[str], timeout: int) -> ProviderResponse:
+def _run_codex_provider(
+    command: list[str], timeout: int, input_text: str
+) -> ProviderResponse:
     with tempfile.TemporaryDirectory(prefix="vidscribe-provider-") as temp_dir:
         output_path = Path(temp_dir) / "last-message.json"
         command_with_output = [
-            *command[:-1],
+            *command,
             "--cd",
             temp_dir,
             "--output-last-message",
             str(output_path),
-            command[-1],
+            "-",
         ]
         response = _run_provider_in_cwd(
             command_with_output,
             timeout=timeout,
             cwd=Path(temp_dir),
             parse_stdout=False,
+            input_text=input_text,
         )
         if not output_path.exists():
             raise ProviderError("codex did not create an output-last-message file.")
@@ -196,6 +206,7 @@ def _run_provider_in_cwd(
     cwd: Path | None,
     *,
     parse_stdout: bool = True,
+    input_text: str | None = None,
 ) -> ProviderResponse:
     started = time.monotonic()
     last_error: ProviderError | None = None
@@ -205,6 +216,7 @@ def _run_provider_in_cwd(
                 command,
                 capture_output=True,
                 text=True,
+                input=input_text,
                 timeout=timeout,
                 check=False,
                 cwd=cwd,
