@@ -192,15 +192,15 @@ video.mp4
 
 ### Task 6: Chunking
 
-- [ ] implement `chunker.chunk(stt: SttResult, frames: list[FrameInfo],
+- [x] implement `chunker.chunk(stt: SttResult, frames: list[FrameInfo],
       strategy: Literal['speaker', 'time', 'scene'], window_s=180) ->
       list[Chunk]`
-- [ ] Chunk = `{idx, start, end, segments[], frame_paths[],
+- [x] Chunk = `{idx, start, end, segments[], frame_paths[],
       surrounding_context: str}`
-- [ ] frame_paths: все кадры в [start, end] + 1 опорный кадр в середине
-- [ ] write tests covering all three strategies (speaker turns / fixed time /
+- [x] frame_paths: все кадры в [start, end] + 1 опорный кадр в середине
+- [x] write tests covering all three strategies (speaker turns / fixed time /
       scene boundaries)
-- [ ] run tests
+- [x] run tests
 
 ### Task 7: Cache layer
 
