@@ -1,2 +1,193 @@
 """Pipeline orchestration."""
 
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Mapping
+
+from pydantic import BaseModel, ConfigDict, Field
+from rich.console import Console
+from rich.progress import Progress
+
+from vidscribe.cache import Cache
+from vidscribe.chunker import Chunk
+from vidscribe.prompts import render
+from vidscribe.provider import Provider, ProviderResponse
+
+
+class CorrectionError(RuntimeError):
+    """Raised when a provider response cannot be used as a corrected chunk."""
+
+
+class CorrectedChunk(BaseModel):
+    """A corrected transcript chunk with provider metadata."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    idx: int
+    start: float
+    end: float
+    speaker: str | None = None
+    corrected_text: str
+    glossary_delta: dict[str, str] = Field(default_factory=dict)
+    notes: str = ""
+    raw_json: dict[str, Any] = Field(default_factory=dict)
+    cost_estimate: float | None = None
+    duration_s: float = 0
+    frame_paths: list[Path] = Field(default_factory=list)
+
+
+def correct_chunks(
+    chunks: list[Chunk],
+    provider: Provider,
+    speakers: Mapping[str, str],
+    cache: Cache | None,
+    *,
+    timeout: int = 300,
+    console: Console | None = None,
+) -> list[CorrectedChunk]:
+    """Correct chunks sequentially while accumulating glossary deltas."""
+
+    glossary: dict[str, str] = {}
+    corrected: list[CorrectedChunk] = []
+    output_console = console or Console()
+
+    with Progress(console=output_console, transient=True) as progress:
+        task_id = progress.add_task("Correcting chunks", total=len(chunks))
+        for chunk in chunks:
+            glossary_snapshot = dict(glossary)
+            cache_key = _cache_key(cache, chunk, provider, glossary_snapshot)
+            cached = cache.get("corrected", cache_key) if cache and cache_key else None
+            if cached is not None:
+                corrected_chunk = CorrectedChunk.model_validate(cached)
+            else:
+                corrected_chunk = _correct_chunk(
+                    chunk=chunk,
+                    provider=provider,
+                    speakers=speakers,
+                    glossary=glossary_snapshot,
+                    timeout=timeout,
+                )
+                if cache is not None and cache_key is not None:
+                    cache.set("corrected", cache_key, corrected_chunk)
+
+            glossary.update(corrected_chunk.glossary_delta)
+            corrected.append(corrected_chunk)
+            progress.advance(task_id)
+
+    return corrected
+
+
+def _correct_chunk(
+    *,
+    chunk: Chunk,
+    provider: Provider,
+    speakers: Mapping[str, str],
+    glossary: Mapping[str, str],
+    timeout: int,
+) -> CorrectedChunk:
+    prompt = render(
+        "correct_chunk",
+        transcript=_chunk_transcript(chunk, speakers),
+        frame_paths=[str(path) for path in chunk.frame_paths],
+        glossary=dict(glossary),
+        speaker_map=dict(speakers),
+    )
+    response = provider.correct(prompt, frame_paths=chunk.frame_paths, timeout=timeout)
+    payload = _correction_payload(response)
+    return CorrectedChunk(
+        idx=chunk.idx,
+        start=chunk.start,
+        end=chunk.end,
+        speaker=_chunk_speaker(chunk),
+        corrected_text=_string_value(payload, "corrected_text", required=True),
+        glossary_delta=_string_dict(payload.get("glossary_delta", {})),
+        notes=_string_value(payload, "notes", required=False),
+        raw_json=response.raw_json,
+        cost_estimate=response.cost_estimate,
+        duration_s=response.duration_s,
+        frame_paths=chunk.frame_paths,
+    )
+
+
+def _cache_key(
+    cache: Cache | None,
+    chunk: Chunk,
+    provider: Provider,
+    glossary_snapshot: Mapping[str, str],
+) -> str | None:
+    if cache is None:
+        return None
+    return cache.key_for(
+        "corrected",
+        chunk=chunk,
+        provider=provider.__class__.__name__,
+        model=getattr(provider, "model", None),
+        glossary_snapshot=dict(glossary_snapshot),
+    )
+
+
+def _chunk_transcript(chunk: Chunk, speakers: Mapping[str, str]) -> str:
+    lines: list[str] = []
+    if chunk.surrounding_context:
+        lines.append(f"Context:\n{chunk.surrounding_context.strip()}")
+    for segment in chunk.segments:
+        speaker_id = segment.speaker or "UNKNOWN"
+        speaker_name = speakers.get(speaker_id, speaker_id)
+        lines.append(
+            f"[{segment.start:.2f}-{segment.end:.2f}] "
+            f"{speaker_id} ({speaker_name}): {segment.text.strip()}"
+        )
+    return "\n".join(lines)
+
+
+def _chunk_speaker(chunk: Chunk) -> str | None:
+    speakers = [
+        segment.speaker
+        for segment in chunk.segments
+        if segment.speaker and segment.speaker.strip()
+    ]
+    if not speakers:
+        return None
+    return max(set(speakers), key=speakers.count)
+
+
+def _correction_payload(response: ProviderResponse) -> dict[str, Any]:
+    if isinstance(response.raw_json.get("corrected_text"), str):
+        return response.raw_json
+
+    text = response.text.strip()
+    if text:
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise CorrectionError("Provider response text is not valid JSON.") from exc
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise CorrectionError("Provider response must include a correction JSON object.")
+
+
+def _string_value(
+    payload: Mapping[str, Any],
+    key: str,
+    *,
+    required: bool,
+) -> str:
+    value = payload.get(key)
+    if isinstance(value, str):
+        return value
+    if required:
+        raise CorrectionError(f"Provider response is missing string field: {key}")
+    return ""
+
+
+def _string_dict(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(key): str(item).strip()
+        for key, item in value.items()
+        if str(key).strip() and str(item).strip()
+    }

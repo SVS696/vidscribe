@@ -259,16 +259,16 @@ video.mp4
 
 ### Task 11: Correction loop
 
-- [ ] implement `pipeline.correct_chunks(chunks, provider, speakers, cache)
+- [x] implement `pipeline.correct_chunks(chunks, provider, speakers, cache)
       -> list[CorrectedChunk]`
-- [ ] sequential по чанкам с накоплением `glossary` (имена, термины,
+- [x] sequential по чанкам с накоплением `glossary` (имена, термины,
       повторяющиеся обороты)
-- [ ] кэш по каждому чанку отдельно (key = hash(chunk_input + provider +
+- [x] кэш по каждому чанку отдельно (key = hash(chunk_input + provider +
       model + glossary_snapshot)) — можно перезапустить только провалившиеся
-- [ ] прогресс-бар через `rich.progress`
-- [ ] write tests с мокнутым провайдером (несколько чанков, проверка
+- [x] прогресс-бар через `rich.progress`
+- [x] write tests с мокнутым провайдером (несколько чанков, проверка
       накопления глоссария)
-- [ ] run tests
+- [x] run tests
 
 ### Task 12: Final assembly
 
