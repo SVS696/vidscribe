@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -192,14 +193,42 @@ def _correction_payload(response: ProviderResponse) -> dict[str, Any]:
 
     text = response.text.strip()
     if text:
+        # 1) pure JSON
         try:
             parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise CorrectionError("Provider response text is not valid JSON.") from exc
-        if isinstance(parsed, dict):
-            return parsed
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
 
-    raise CorrectionError("Provider response must include a correction JSON object.")
+        # 2) JSON inside markdown code block ```json ... ``` or ``` ... ```
+        fence_match = re.search(
+            r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE
+        )
+        if fence_match:
+            try:
+                parsed = json.loads(fence_match.group(1))
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+        # 3) first balanced { ... } block in the text
+        brace_match = re.search(r"\{.*\}", text, re.DOTALL)
+        if brace_match:
+            try:
+                parsed = json.loads(brace_match.group(0))
+                if isinstance(parsed, dict):
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+
+    preview = (response.text or "")[:500]
+    raise CorrectionError(
+        "Provider response is not valid correction JSON. "
+        f"raw_json keys={sorted(response.raw_json.keys())} "
+        f"text preview={preview!r}"
+    )
 
 
 def _corrected_segments(
