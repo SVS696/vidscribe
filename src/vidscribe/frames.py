@@ -58,6 +58,7 @@ def _build_scene_detect_command(
         "-y",
         "-i",
         str(video),
+        "-an",  # ignore audio: not needed for frames, avoids demuxer/audio-sync stalls
         "-vf",
         select_filter,
         "-fps_mode",
@@ -93,6 +94,7 @@ def _build_sample_only_command(
         "+discardcorrupt+genpts",
         "-i",
         str(video),
+        "-an",  # ignore audio: not needed for frames, avoids demuxer/audio-sync stalls
         "-vf",
         select_filter,
         "-fps_mode",
