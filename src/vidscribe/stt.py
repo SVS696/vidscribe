@@ -195,9 +195,8 @@ def transcribe(
 
     if pipeline_progress is not None:
         pipeline_progress.log(
-            f"[2/9] STT: model={model}, device={resolved_device}, language={language}"
+            f"[2/9] Loading whisper from {model_path}"
         )
-        pipeline_progress.log("[2/9] STT loading model...")
 
     t0_load = _time.monotonic()
     whisper_model_class = _whisper_model_class()
@@ -208,8 +207,13 @@ def transcribe(
     )
 
     if pipeline_progress is not None:
+        load_elapsed = _time.monotonic() - t0_load
         pipeline_progress.log(
-            f"[2/9] STT model loaded in {_time.monotonic() - t0_load:.1f}s"
+            f"[2/9] Whisper loaded in {load_elapsed:.1f}s"
+            f" | model={effective_model}, device={resolved_device}, compute_type={compute_type}"
+        )
+        pipeline_progress.log(
+            f"[2/9] STT: language={language}"
         )
 
     segments_iter, info = whisper_model.transcribe(
@@ -320,10 +324,21 @@ def diarize(
 
     waveform = _load_waveform(audio_path)
 
-    diar_source = "local noScribe pipeline" if assets is not None else "pyannote/speaker-diarization-3.1"
     if pipeline_progress is not None:
-        pipeline_progress.log(f"[3/9] Diarization: pyannote ({diar_source})")
-        pipeline_progress.log("[3/9] Diarization loading pipeline...")
+        if assets is not None:
+            pipeline_progress.log(
+                f"[3/9] Loading pyannote pipeline from {assets.config_yaml}"
+            )
+            pipeline_progress.log(
+                f"[3/9]   segmentation: {assets.segmentation_path}"
+            )
+            pipeline_progress.log(
+                f"[3/9]   embedding:    {assets.embedding_path}"
+            )
+        else:
+            pipeline_progress.log(
+                "[3/9] Loading pyannote pipeline: pyannote/speaker-diarization-3.1"
+            )
 
     t0_diar = _time.monotonic()
     ctx = (
@@ -336,16 +351,24 @@ def diarize(
         if assets is not None:
             with tempfile.TemporaryDirectory(prefix="vidscribe-pyannote-") as temp_dir:
                 config_path = _patched_pyannote_config(assets, Path(temp_dir))
+                t0_load_diar = _time.monotonic()
                 pipeline = pipeline_class.from_pretrained(str(config_path))
                 if pipeline_progress is not None:
+                    pipeline_progress.log(
+                        f"[3/9] Pipeline loaded in {_time.monotonic() - t0_load_diar:.1f}s"
+                    )
                     pipeline_progress.log("[3/9] Diarization running...")
                 annotation = pipeline(waveform, **call_kwargs)
         else:
+            t0_load_diar = _time.monotonic()
             pipeline = pipeline_class.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
                 use_auth_token=hf_token,
             )
             if pipeline_progress is not None:
+                pipeline_progress.log(
+                    f"[3/9] Pipeline loaded in {_time.monotonic() - t0_load_diar:.1f}s"
+                )
                 pipeline_progress.log("[3/9] Diarization running...")
             annotation = pipeline(waveform, **call_kwargs)
 
