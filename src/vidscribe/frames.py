@@ -276,7 +276,28 @@ def _read_frames_progress(
     while proc.poll() is None:
         now = _time.monotonic()
 
-        # Non-blocking read with 1 s timeout so we can check the watchdog
+        # Watchdog: check on EVERY iteration. ffmpeg keeps spamming non-out_time
+        # progress lines (bitrate=, speed=, etc.) so the select() ready branch
+        # may always be true while out_time_us is stuck. Checking unconditionally
+        # is the only way to catch a stall.
+        if now - last_progress_at > stuck_timeout:
+            audio_s = out_time_us / 1_000_000
+            mm, ss = divmod(int(audio_s), 60)
+            hh, mm = divmod(mm, 60)
+            stuck_at = f"{hh}:{mm:02d}:{ss:02d}" if hh else f"{mm}:{ss:02d}"
+            if pipeline_progress is not None:
+                pipeline_progress.log(
+                    f"[5/9] FFmpeg stuck at {stuck_at} for {stuck_timeout:.0f}s — killing subprocess"
+                )
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            raise FrameExtractionError(
+                f"ffmpeg stuck at {stuck_at} for {stuck_timeout:.0f}s, killed"
+            )
+
+        # Non-blocking read with 1 s timeout
         try:
             ready, _, _ = _select.select([proc.stdout], [], [], 1.0)
         except (ValueError, OSError):
@@ -302,25 +323,6 @@ def _read_frames_progress(
                     if new_val != out_time_us:
                         out_time_us = new_val
                         last_progress_at = _time.monotonic()
-        else:
-            # Timeout — no data from ffmpeg. Check watchdog.
-            now = _time.monotonic()
-            if now - last_progress_at > stuck_timeout:
-                audio_s = out_time_us / 1_000_000
-                mm, ss = divmod(int(audio_s), 60)
-                hh, mm = divmod(mm, 60)
-                stuck_at = f"{hh}:{mm:02d}:{ss:02d}" if hh else f"{mm}:{ss:02d}"
-                if pipeline_progress is not None:
-                    pipeline_progress.log(
-                        f"[5/9] FFmpeg stuck at {stuck_at} for {stuck_timeout:.0f}s — killing subprocess"
-                    )
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
-                raise FrameExtractionError(
-                    f"ffmpeg stuck at {stuck_at} for {stuck_timeout:.0f}s, killed"
-                )
 
         # Periodic progress log
         if pipeline_progress is not None:
