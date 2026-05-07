@@ -334,7 +334,7 @@ def _correct_chunk_mix(
         cost_estimate=total_cost,
         duration_s=text_response.duration_s + visual_response.duration_s,
         frame_paths=frame_paths,
-        screen_events=_parse_screen_events(visual_payload),
+        screen_events=_parse_screen_events(visual_payload, chunk_start=chunk.start, chunk_end=chunk.end),
     )
 
 
@@ -376,7 +376,7 @@ def _correct_chunk(
         cost_estimate=response.cost_estimate,
         duration_s=response.duration_s,
         frame_paths=frame_paths,
-        screen_events=_parse_screen_events(payload),
+        screen_events=_parse_screen_events(payload, chunk_start=chunk.start, chunk_end=chunk.end),
     )
 
 
@@ -559,8 +559,24 @@ def _string_dict(value: Any) -> dict[str, str]:
     }
 
 
-def _parse_screen_events(payload: Mapping[str, Any]) -> list[ScreenEvent]:
-    """Parse screen_events list from a correction payload, ignoring malformed entries."""
+_SCREEN_EVENT_DRIFT_LIMIT = 5.0  # seconds outside chunk window before DROP
+
+
+def _parse_screen_events(
+    payload: Mapping[str, Any],
+    chunk_start: float = 0.0,
+    chunk_end: float = float("inf"),
+) -> list[ScreenEvent]:
+    """Parse screen_events from a correction payload.
+
+    Timestamps are clamped to ``[chunk_start, chunk_end]``.  Events whose raw
+    ``ts`` is more than ``_SCREEN_EVENT_DRIFT_LIMIT`` seconds outside the
+    window are silently dropped (LLM hallucination guard).
+    """
+    import logging as _logging
+
+    _log = _logging.getLogger(__name__)
+
     raw = payload.get("screen_events")
     if not isinstance(raw, list):
         return []
@@ -573,8 +589,21 @@ def _parse_screen_events(payload: Mapping[str, Any]) -> list[ScreenEvent]:
             description = str(item.get("description", "")).strip()
         except (TypeError, ValueError):
             continue
-        if description:
-            events.append(ScreenEvent(ts=ts, description=description))
+        if not description:
+            continue
+        # Drop events far outside the chunk window.
+        if ts < chunk_start - _SCREEN_EVENT_DRIFT_LIMIT or ts > chunk_end + _SCREEN_EVENT_DRIFT_LIMIT:
+            _log.warning(
+                "screen_event ts=%.2f dropped: outside chunk window [%.2f, %.2f] by >%.1fs",
+                ts,
+                chunk_start,
+                chunk_end,
+                _SCREEN_EVENT_DRIFT_LIMIT,
+            )
+            continue
+        # Clamp to chunk window.
+        ts = max(chunk_start, min(ts, chunk_end))
+        events.append(ScreenEvent(ts=ts, description=description))
     return events
 
 
