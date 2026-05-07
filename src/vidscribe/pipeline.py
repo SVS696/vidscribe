@@ -201,6 +201,17 @@ def correct_chunks(
                     pipeline_progress.log(
                         f"[8/9] {chunk_label}: visual pass done in {visual_dur:.1f}s, {n_evts} screen events"
                     )
+                    # Usage info is stored in corrected_chunk.raw_json (visual pass)
+                    usage_str = _format_usage(
+                        ProviderResponse(
+                            text="",
+                            raw_json=corrected_chunk.raw_json,
+                            cost_estimate=corrected_chunk.cost_estimate,
+                            duration_s=corrected_chunk.duration_s,
+                        )
+                    )
+                    if usage_str:
+                        pipeline_progress.log(f"[8/9] {chunk_label}: {usage_str}")
                 if cache is not None and cache_key is not None:
                     cache.set("corrected", cache_key, corrected_chunk)
             else:
@@ -220,9 +231,18 @@ def correct_chunks(
                 if pipeline_progress is not None:
                     chunk_dur = corrected_chunk.duration_s
                     n_segs = len(corrected_chunk.segments)
-                    pipeline_progress.log(
-                        f"[8/9] {chunk_label}: done in {chunk_dur:.1f}s, {n_segs} segments"
+                    usage_str = _format_usage(
+                        ProviderResponse(
+                            text="",
+                            raw_json=corrected_chunk.raw_json,
+                            cost_estimate=corrected_chunk.cost_estimate,
+                            duration_s=corrected_chunk.duration_s,
+                        )
                     )
+                    log_msg = f"[8/9] {chunk_label}: done in {chunk_dur:.1f}s, {n_segs} segments"
+                    if usage_str:
+                        log_msg = f"{log_msg} | {usage_str}"
+                    pipeline_progress.log(log_msg)
                 if cache is not None and cache_key is not None:
                     cache.set("corrected", cache_key, corrected_chunk)
 
@@ -248,8 +268,16 @@ def correct_chunks(
     if pipeline_progress is not None:
         loop_elapsed = _time.monotonic() - t0_loop
         mm, ss = divmod(int(loop_elapsed), 60)
+        # Compute total cost across all chunks
+        total_cost: float | None = None
+        for ch in corrected:
+            if ch.cost_estimate is not None:
+                total_cost = (total_cost or 0.0) + ch.cost_estimate
+        cost_str = f" | total ~${total_cost:.2f}" if total_cost is not None else ""
         pipeline_progress.log(
             f"[8/9] Correction loop done in {mm}:{ss:02d}"
+            f"{cost_str}"
+            f" | {len(corrected)} chunks"
         )
 
     return corrected
@@ -547,6 +575,25 @@ def _float_value(value: Any, fallback: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _format_usage(response: ProviderResponse) -> str:
+    """Format token/cost info from a ProviderResponse, or return empty string."""
+    try:
+        usage = response.raw_json.get("usage") or {}
+        input_tok = usage.get("input_tokens") or usage.get("prompt_tokens")
+        output_tok = usage.get("output_tokens") or usage.get("completion_tokens")
+        cost = response.cost_estimate
+        parts: list[str] = []
+        if input_tok is not None and output_tok is not None:
+            def _fmt_k(n: int) -> str:
+                return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+            parts.append(f"tokens {_fmt_k(int(input_tok))}+{_fmt_k(int(output_tok))}")
+        if cost is not None:
+            parts.append(f"${float(cost):.3f}")
+        return " | ".join(parts)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _string_dict(value: Any) -> dict[str, str]:

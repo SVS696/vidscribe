@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time as _time
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Mapping
 
 from vidscribe.pipeline import CorrectedChunk, ScreenEvent
@@ -23,11 +24,16 @@ def assemble(
     screen_context_mode: ScreenContextMode = "off",
     *,
     pipeline_progress: "PipelineProgress | None" = None,
+    output_path: Path | None = None,
 ) -> str:
     """Render corrected chunks into a final transcript."""
-
+    n_chunks = len(corrected)
     if pipeline_progress is not None:
-        pipeline_progress.log(f"[9/9] Final assembly: {fmt} format, screen_context={screen_context_mode}")
+        pipeline_progress.log(
+            f"[9/9] Assembling: {n_chunks} chunks"
+            f" | screen-context {screen_context_mode}"
+            f" | {len(speakers)} speakers"
+        )
     t0 = _time.monotonic()
 
     chunks = sorted(corrected, key=lambda chunk: (chunk.start, chunk.idx))
@@ -43,8 +49,13 @@ def assemble(
         n_turns = len([t for t in _assembly_turns(chunks) if t.corrected_text.strip()])
         size_kb = len(result.encode()) / 1024
         pipeline_progress.log(
-            f"[9/9] Assembly done in {elapsed:.2f}s | {n_turns} turns, {size_kb:.1f} KB"
+            f"[9/9] Assembly done in {elapsed:.2f}s | {n_chunks} chunks → {n_turns} turns"
+            f" | {size_kb:.1f} KB"
         )
+        if output_path is not None:
+            pipeline_progress.log(
+                f"[9/9] Wrote {size_kb:.1f} KB to {output_path}"
+            )
 
     return result
 

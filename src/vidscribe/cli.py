@@ -16,7 +16,7 @@ import typer
 from pydantic import ValidationError
 from rich.console import Console
 
-from vidscribe import assembler, audio, chunker, frames, provider, speakers, stt
+from vidscribe import assembler, audio, chunker, edit as edit_module, frames, provider, speakers, stt
 from vidscribe.cache import Cache
 from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, CorrectionMode, ScreenContextMode, load_config
 from vidscribe.frames import FrameInfo
@@ -268,13 +268,14 @@ def pipeline_command(
             pipeline_progress=pp,
             screen_context_mode=config.screen_context_mode,
         )
+        output_path = out or video.with_suffix(".md")
         transcript = assembler.assemble(
             corrected,
             speaker_map,
             screen_context_mode=config.screen_context_mode,
             pipeline_progress=pp,
+            output_path=output_path,
         )
-    output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(transcript, encoding="utf-8")
     cache.set("final", video_key, transcript)
@@ -416,13 +417,14 @@ def correct_command(
             pipeline_progress=pp,
             screen_context_mode=config.screen_context_mode,
         )
+        output_path = out or video.with_suffix(".md")
         transcript = assembler.assemble(
             corrected,
             speaker_map,
             screen_context_mode=config.screen_context_mode,
             pipeline_progress=pp,
+            output_path=output_path,
         )
-    output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(transcript, encoding="utf-8")
     cache.set("final", video_key, transcript)
@@ -546,6 +548,79 @@ def logs_command(
         console.print("No log files found in .vidscribe/logs/")
         raise typer.Exit(1)
     console.print(str(log_path))
+
+
+@app.command("edit")
+def edit_command(
+    ctx: typer.Context,
+    transcript: Annotated[Path, typer.Argument(help="Path to the markdown transcript file.")],
+    instruction: Annotated[
+        list[str],
+        typer.Option(
+            "--instruction",
+            "-i",
+            help="Edit instruction (repeat for multiple).",
+        ),
+    ] = [],
+    provider_name: Annotated[
+        str | None,
+        typer.Option("--provider", help="CLI provider: claude, codex, or ollama."),
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Provider model name."),
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Write edited transcript to this path (default: in-place)."),
+    ] = None,
+    in_place: Annotated[
+        bool,
+        typer.Option("--in-place", help="Overwrite the input file (default when --out is omitted)."),
+    ] = False,
+) -> None:
+    """Apply LLM-driven text edits to a finished transcript.
+
+    Examples:
+
+        vidscribe edit transcript.md -i "replace s00 with Алексей" --provider claude
+
+        vidscribe edit transcript.md \\
+            -i "replace s00 with Алексей" \\
+            -i "replace s01 with Андрей" \\
+            --provider claude --model sonnet \\
+            --out transcript-edited.md
+    """
+    if not transcript.exists():
+        raise typer.BadParameter(f"Transcript file not found: {transcript}")
+    if not instruction:
+        raise typer.BadParameter("At least one --instruction / -i is required.")
+
+    config = config_from_context(ctx)
+    # Command-level provider/model overrides
+    effective_provider = provider_name or config.provider
+    effective_model = model or config.model
+
+    opts: dict[str, Any] = {}
+    if effective_model:
+        opts["model"] = effective_model
+    cli_provider = provider.make(effective_provider, **opts)
+
+    transcript_text = transcript.read_text(encoding="utf-8")
+    edited = edit_module.apply_edits(transcript_text, instruction, cli_provider)
+
+    # Determine output path
+    if out is not None:
+        output_path = out
+    elif in_place:
+        output_path = transcript
+    else:
+        # Default: overwrite in place (same as --in-place)
+        output_path = transcript
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(edited, encoding="utf-8")
+    console.print(str(output_path))
 
 
 def _parse_speakers(value: str) -> tuple[str, ...]:
