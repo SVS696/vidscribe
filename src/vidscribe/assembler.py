@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Literal, Mapping
+import time as _time
+from typing import TYPE_CHECKING, Literal, Mapping
 
 from vidscribe.pipeline import CorrectedChunk, ScreenEvent
+
+if TYPE_CHECKING:
+    from vidscribe.progress import PipelineProgress
 
 
 OutputFormat = Literal["md", "srt"]
@@ -16,15 +20,32 @@ def assemble(
     speakers: Mapping[str, str],
     fmt: OutputFormat = "md",
     screen_context_mode: ScreenContextMode = "off",
+    *,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> str:
     """Render corrected chunks into a final transcript."""
 
+    if pipeline_progress is not None:
+        pipeline_progress.log(f"[9/9] Final assembly: {fmt} format, screen_context={screen_context_mode}")
+    t0 = _time.monotonic()
+
     chunks = sorted(corrected, key=lambda chunk: (chunk.start, chunk.idx))
     if fmt == "md":
-        return _assemble_markdown(chunks, speakers, screen_context_mode=screen_context_mode)
-    if fmt == "srt":
-        return _assemble_srt(chunks, speakers)
-    raise ValueError(f"Unsupported output format: {fmt}")
+        result = _assemble_markdown(chunks, speakers, screen_context_mode=screen_context_mode)
+    elif fmt == "srt":
+        result = _assemble_srt(chunks, speakers)
+    else:
+        raise ValueError(f"Unsupported output format: {fmt}")
+
+    if pipeline_progress is not None:
+        elapsed = _time.monotonic() - t0
+        n_turns = len([t for t in _assembly_turns(chunks) if t.corrected_text.strip()])
+        size_kb = len(result.encode()) / 1024
+        pipeline_progress.log(
+            f"[9/9] Assembly done in {elapsed:.2f}s | {n_turns} turns, {size_kb:.1f} KB"
+        )
+
+    return result
 
 
 def _assemble_markdown(

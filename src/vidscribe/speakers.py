@@ -61,11 +61,21 @@ def identify(
         if isinstance(cached, dict):
             return _finalize(speaker_ids, _string_dict(cached))
 
+    import time as _time
+
+    provider_name = provider.__class__.__name__
+    provider_model = getattr(provider, "model", None) or ""
+    provider_desc = f"{provider_name}/{provider_model}" if provider_model else provider_name
+
+    if pipeline_progress is not None:
+        pipeline_progress.log(f"[7/9] Speaker identification: {provider_desc}")
+
     ctx = (
         pipeline_progress.stage("speakers")
         if pipeline_progress is not None
         else _null_stage()
     )
+    t0 = _time.monotonic()
     with ctx:
         selected = _representative_segments(stt, speaker_ids)
         frame_paths = [path.resolve() for path in _representative_frame_paths(frames, selected)]
@@ -78,6 +88,13 @@ def identify(
         response = provider.correct(prompt, frame_paths=frame_paths, timeout=timeout)
         provider_map = _provider_speaker_map(response.raw_json, response.text)
         speaker_map = _finalize(speaker_ids, provider_map | manual_map)
+
+    if pipeline_progress is not None:
+        elapsed = _time.monotonic() - t0
+        mapping_str = ", ".join(f"{k}→{v}" for k, v in sorted(speaker_map.items()))
+        pipeline_progress.log(
+            f"[7/9] Speakers identified in {elapsed:.1f}s | {mapping_str}"
+        )
 
     if cache is not None and cache_key is not None:
         cache.set("speakers", cache_key, speaker_map)

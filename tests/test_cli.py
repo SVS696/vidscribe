@@ -116,7 +116,11 @@ def test_pipeline_command_wires_full_run_with_command_overrides(
     speakers_mock.assert_called_once()
     assert speakers_mock.call_args.kwargs["manual"] == ("Alice",)
     correct_mock.assert_called_once()
-    assemble_mock.assert_called_once_with([corrected_item()], {"SPEAKER_00": "Alice"}, screen_context_mode="off")
+    assemble_mock.assert_called_once()
+    call_args = assemble_mock.call_args
+    assert call_args.args[0] == [corrected_item()]
+    assert call_args.args[1] == {"SPEAKER_00": "Alice"}
+    assert call_args.kwargs.get("screen_context_mode") == "off"
     transcribe_mock.assert_called_once()
 
 

@@ -268,8 +268,12 @@ def pipeline_command(
             pipeline_progress=pp,
             screen_context_mode=config.screen_context_mode,
         )
-        with pp.stage("assembly"):
-            transcript = assembler.assemble(corrected, speaker_map, screen_context_mode=config.screen_context_mode)
+        transcript = assembler.assemble(
+            corrected,
+            speaker_map,
+            screen_context_mode=config.screen_context_mode,
+            pipeline_progress=pp,
+        )
     output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(transcript, encoding="utf-8")
@@ -412,8 +416,12 @@ def correct_command(
             pipeline_progress=pp,
             screen_context_mode=config.screen_context_mode,
         )
-        with pp.stage("assembly"):
-            transcript = assembler.assemble(corrected, speaker_map, screen_context_mode=config.screen_context_mode)
+        transcript = assembler.assemble(
+            corrected,
+            speaker_map,
+            screen_context_mode=config.screen_context_mode,
+            pipeline_progress=pp,
+        )
     output_path = out or video.with_suffix(".md")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(transcript, encoding="utf-8")
@@ -682,6 +690,13 @@ def _transcribe_audio(
         hf_token=config.hf_token,
         pipeline_progress=pipeline_progress,
     )
+    import time as _time
+
+    if pipeline_progress is not None:
+        pipeline_progress.log(
+            f"[4/9] Merging ASR + diarization | {len(asr.segments)} segments"
+        )
+    t0_merge = _time.monotonic()
     merge_ctx = (
         pipeline_progress.stage("merge")
         if pipeline_progress is not None
@@ -689,6 +704,12 @@ def _transcribe_audio(
     )
     with merge_ctx:
         result = stt.merge_asr_diar(asr, diar)
+    if pipeline_progress is not None:
+        elapsed_merge = _time.monotonic() - t0_merge
+        n_turns = len({seg.speaker for seg in result.segments if seg.speaker})
+        pipeline_progress.log(
+            f"[4/9] Merge done in {elapsed_merge:.2f}s | {len(result.segments)} segments, {n_turns} speaker turns"
+        )
     cache.set("asr", video_key, asr)
     cache.set("diar", video_key, diar)
     cache.set("stt", video_key, result)
@@ -717,19 +738,12 @@ def _chunks(
     if isinstance(cached, list):
         return [chunker.Chunk.model_validate(item) for item in cached]
 
-    ctx = (
-        pipeline_progress.stage("chunks")
-        if pipeline_progress is not None
-        else _null_pp_stage()
+    chunk_items = chunker.chunk(
+        stt_result,
+        frame_items,
+        config.chunk_strategy,
+        pipeline_progress=pipeline_progress,
     )
-    with ctx:
-        chunk_items = chunker.chunk(stt_result, frame_items, config.chunk_strategy)
-    pp_print = (
-        pipeline_progress.print(f"  {len(chunk_items)} chunks")
-        if pipeline_progress is not None
-        else None
-    )
-    _ = pp_print  # suppress unused warning
     cache.set("chunks", cache_key, chunk_items)
     return chunk_items
 
