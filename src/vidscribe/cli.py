@@ -162,17 +162,9 @@ def log_file_from_context(ctx: typer.Context, command_name: str) -> Path | None:
     override: Path | None = obj.get("log_file")
     if override is not None:
         return override
-    # Derive log root from cache_dir parent so logs sit next to cache
-    config: AppConfig | None = obj.get("config")
-    log_root: Path | None = None
-    if config is not None:
-        # cache_dir is e.g. `Path(".vidscribe")` or an absolute path;
-        # logs go in cache_dir.parent / ".vidscribe" / "logs" only when
-        # cache_dir is the default `.vidscribe`; otherwise use cwd.
-        if config.cache_dir.name == ".vidscribe":
-            log_root = config.cache_dir.parent
-        # else: leave log_root=None → make_log_path uses cwd
-    return make_log_path(command_name, root=log_root)
+    # Logs live alongside the cache; make_log_path(root=None) resolves via
+    # default_logs_dir() which honours VIDSCRIBE_CACHE_DIR and platform defaults.
+    return make_log_path(command_name, root=None)
 
 
 @app.command("pipeline")

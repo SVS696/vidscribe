@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 
 from vidscribe.cli import app
 from vidscribe.config import AppConfig, load_config
+from vidscribe.paths import default_cache_dir
 
 
 def test_app_config_defaults() -> None:
@@ -18,9 +19,26 @@ def test_app_config_defaults() -> None:
     assert config.whisper_model == "noscribe-precise"
     assert config.language == "ru"
     assert config.hf_token is None
-    assert config.cache_dir == Path(".vidscribe")
+    assert config.cache_dir == default_cache_dir()
     assert config.no_cache == ()
     assert config.speakers == ()
+
+
+def test_app_config_default_cache_dir_is_absolute_user_path() -> None:
+    """Default cache_dir must be an absolute path in the user's home area."""
+    config = AppConfig()
+    assert config.cache_dir.is_absolute()
+    # Must be somewhere under home (or a custom VIDSCRIBE_CACHE_DIR)
+    import os
+    if not os.environ.get("VIDSCRIBE_CACHE_DIR"):
+        assert str(config.cache_dir).startswith(str(Path.home()))
+
+
+def test_app_config_cache_dir_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """VIDSCRIBE_CACHE_DIR env sets default cache_dir on fresh AppConfig()."""
+    monkeypatch.setenv("VIDSCRIBE_CACHE_DIR", "/tmp/test-vidscribe-cache")
+    config = AppConfig()
+    assert config.cache_dir == Path("/tmp/test-vidscribe-cache")
 
 
 def test_env_overrides_supported_values(monkeypatch) -> None:

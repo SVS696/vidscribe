@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import pytest
+
 from vidscribe.logging_setup import (
     TeeWriter,
     list_log_files,
@@ -72,11 +74,17 @@ def test_make_log_path_includes_timestamp(tmp_path: Path) -> None:
     assert stem.count("-") >= 5  # date + time separators
 
 
-def test_make_log_path_uses_cwd_when_root_is_none(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.chdir(tmp_path)
+def test_make_log_path_uses_default_logs_dir_when_root_is_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Point VIDSCRIBE_CACHE_DIR to tmp_path so we don't pollute the real cache dir
+    monkeypatch.setenv("VIDSCRIBE_CACHE_DIR", str(tmp_path))
     log_path = make_log_path("transcribe")
-    assert log_path.is_absolute() or log_path.parent.exists()
+    assert log_path.is_absolute()
+    assert log_path.parent.exists()
     assert "transcribe" in log_path.name
+    # Should be inside tmp_path/logs/
+    assert log_path.parent == tmp_path / "logs"
 
 
 # ---------------------------------------------------------------------------

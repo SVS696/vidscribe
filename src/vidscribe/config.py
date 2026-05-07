@@ -9,6 +9,8 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from vidscribe.paths import default_cache_dir
+
 
 ChunkStrategy = Literal["speaker", "time", "scene"]
 ProviderName = Literal["claude", "codex", "ollama"]
@@ -39,7 +41,7 @@ class AppConfig(BaseModel):
     whisper_model: str = "noscribe-precise"
     language: str = "ru"
     hf_token: str | None = None
-    cache_dir: Path = Path(".vidscribe")
+    cache_dir: Path = Field(default_factory=default_cache_dir)
     no_cache: tuple[CacheStage, ...] = ()
     speakers: tuple[str, ...] = ()
     correction_mode: CorrectionMode = "single"

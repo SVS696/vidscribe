@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TextIO
 
+from vidscribe.paths import default_logs_dir as _default_logs_dir
+
 
 # ---------------------------------------------------------------------------
 # TeeWriter — writes to multiple streams simultaneously
@@ -62,9 +64,16 @@ class TeeWriter:
 
 
 def _logs_dir(root: Path | None = None) -> Path:
-    """Return `.vidscribe/logs/` relative to *root* (default: cwd)."""
-    base = root if root is not None else Path.cwd()
-    return base / ".vidscribe" / "logs"
+    """Return the logs directory.
+
+    When *root* is given, returns ``root / ".vidscribe" / "logs"`` (legacy
+    behaviour for callers that pass an explicit root).  When *root* is
+    ``None``, returns the platform-specific default logs directory via
+    :func:`~vidscribe.paths.default_logs_dir`.
+    """
+    if root is not None:
+        return root / ".vidscribe" / "logs"
+    return _default_logs_dir()
 
 
 def make_log_path(command_name: str, *, root: Path | None = None) -> Path:
