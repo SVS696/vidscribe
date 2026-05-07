@@ -463,6 +463,17 @@ def _chunk_speaker(chunk: Chunk) -> str | None:
     return max(set(speakers), key=speakers.count)
 
 
+_FENCE_OPEN_RE = re.compile(r"^\s*```(?:json|JSON)?\s*\n?", re.IGNORECASE)
+_FENCE_CLOSE_RE = re.compile(r"\n?\s*```\s*$")
+
+
+def _strip_markdown_fence(text: str) -> str:
+    """Remove leading ```json / ``` and trailing ``` from a chat response."""
+    out = _FENCE_OPEN_RE.sub("", text, count=1)
+    out = _FENCE_CLOSE_RE.sub("", out, count=1)
+    return out.strip()
+
+
 def _correction_payload(response: ProviderResponse) -> dict[str, Any]:
     if isinstance(response.raw_json.get("corrected_text"), str):
         return response.raw_json
@@ -479,23 +490,24 @@ def _correction_payload(response: ProviderResponse) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
-        # 2) JSON inside markdown code block ```json ... ``` or ``` ... ```
-        fence_match = re.search(
-            r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL | re.IGNORECASE
-        )
-        if fence_match:
+        # 2) Strip markdown code fence wrappers (claude often wraps in ```json ... ```)
+        stripped = _strip_markdown_fence(text)
+        if stripped and stripped != text:
             try:
-                parsed = json.loads(fence_match.group(1))
+                parsed = json.loads(stripped)
                 if isinstance(parsed, dict):
                     return parsed
             except json.JSONDecodeError:
                 pass
 
-        # 3) first balanced { ... } block in the text
-        brace_match = re.search(r"\{.*\}", text, re.DOTALL)
-        if brace_match:
+        # 3) Greedy { ... } slice, scanning back from the last '}' to find a balanced
+        #    JSON object. Handles cases where the response has trailing prose after JSON.
+        first_brace = text.find("{")
+        last_brace = text.rfind("}")
+        if first_brace != -1 and last_brace > first_brace:
+            candidate = text[first_brace : last_brace + 1]
             try:
-                parsed = json.loads(brace_match.group(0))
+                parsed = json.loads(candidate)
                 if isinstance(parsed, dict):
                     return parsed
             except json.JSONDecodeError:
