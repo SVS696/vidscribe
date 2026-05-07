@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time as _time
 from typing import TYPE_CHECKING, Literal, Mapping
 
@@ -56,7 +57,7 @@ def _assemble_markdown(
 ) -> str:
     blocks: list[_MergedBlock] = []
     for turn in _assembly_turns(chunks):
-        text = turn.corrected_text.strip()
+        text = _normalize_text(turn.corrected_text)
         if not text:
             continue
 
@@ -115,7 +116,7 @@ def _assemble_markdown(
                 prefix = "\n".join(prefix_lines) + "\n\n"
             else:
                 prefix = ""
-            text = "\n\n".join(block.texts)
+            text = _join_texts(block.texts)
             rendered.append(f"{header}{prefix}{text}")
 
         elif screen_context_mode == "footer":
@@ -134,12 +135,12 @@ def _assemble_markdown(
                     text_parts.append(turn_text + "\n" + "\n".join(footer_lines))
                 else:
                     text_parts.append(turn_text)
-            text = "\n\n".join(text_parts)
+            text = _join_texts(text_parts)
             rendered.append(f"{header}{text}")
 
         else:
             # "off" or "aside" — normal rendering
-            text = "\n\n".join(block.texts)
+            text = _join_texts(block.texts)
             rendered.append(
                 f"## [{_format_markdown_time(block.start)}] **{block.speaker}**\n\n"
                 f"{text}"
@@ -231,12 +232,42 @@ class _MergedBlock:
         self.turn_screen_events: list[list[ScreenEvent]] = turn_screen_events or []
 
 
+def _normalize_text(text: str) -> str:
+    """Strip and collapse triple+ newlines to at most two (one blank line)."""
+    text = text.strip()
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
+def _join_texts(texts: list[str]) -> str:
+    """Join paragraph texts with a single blank line, then normalize the result."""
+    joined = "\n\n".join(texts)
+    return re.sub(r"\n{3,}", "\n\n", joined)
+
+
 def _speaker_name(speaker_id: str | None, speakers: Mapping[str, str]) -> str:
-    if speaker_id and speaker_id in speakers:
+    if not speaker_id:
+        return "Unknown"
+    if speaker_id in speakers:
         return speakers[speaker_id]
-    if speaker_id:
-        return speaker_id
-    return "Unknown"
+    # Cross-lookup: try normalised forms (sXX ↔ SPEAKER_XX).
+    # e.g. turn.speaker="SPEAKER_01", map has key "s01" → return mapped name
+    # or turn.speaker="s01", map has key "SPEAKER_01" → return mapped name
+    normalised = _normalise_speaker_id(speaker_id)
+    for key, name in speakers.items():
+        if _normalise_speaker_id(key) == normalised:
+            return name
+    return speaker_id
+
+
+def _normalise_speaker_id(speaker_id: str) -> str:
+    """Collapse SPEAKER_XX and sXX to a canonical integer string for comparison."""
+    sid = speaker_id.strip().upper()
+    # SPEAKER_01 → "1", S01 → "1"
+    if sid.startswith("SPEAKER_"):
+        return sid[len("SPEAKER_"):].lstrip("0") or "0"
+    if sid.startswith("S") and sid[1:].isdigit():
+        return sid[1:].lstrip("0") or "0"
+    return sid
 
 
 def _format_markdown_time(seconds: float) -> str:

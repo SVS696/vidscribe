@@ -250,3 +250,113 @@ def test_screen_context_footer_appends_event_after_reply() -> None:
     reply_pos = transcript.index("Выделяю ячейку.")
     footer_pos = transcript.index("*[scene")
     assert reply_pos < footer_pos
+
+
+# ---------------------------------------------------------------------------
+# A: spacing normalisation tests
+# ---------------------------------------------------------------------------
+
+def test_assemble_collapses_triple_newlines_in_corrected_text() -> None:
+    """Triple+ newlines inside a segment's corrected_text are collapsed to \\n\\n."""
+    import re
+
+    chunk = corrected(0, 0, 10, "SPEAKER_00", "line1\n\n\nline2\n\n\n\nline3")
+    result = assemble([chunk], {"SPEAKER_00": "Иван"})
+    assert not re.search(r"\n{3,}", result), "Expected no triple+ newlines"
+    assert "line1\n\nline2\n\nline3" in result
+
+
+def test_assemble_collapses_triple_newlines_across_turns() -> None:
+    """Joining two turns that each end with \\n\\n must not produce triple newlines."""
+    import re
+
+    # corrected_text with internal double-newline + join via \\n\\n
+    c0 = corrected(0, 0, 5, "SPEAKER_00", "para1\n\npara2")
+    c1 = corrected(1, 5, 10, "SPEAKER_00", "para3\n\npara4")
+    result = assemble([c0, c1], {"SPEAKER_00": "Иван"})
+    assert not re.search(r"\n{3,}", result), "Expected no triple+ newlines"
+
+
+# ---------------------------------------------------------------------------
+# B: screen_event ts clamp tests
+# ---------------------------------------------------------------------------
+
+def test_parse_screen_events_clamps_ts_to_chunk_window() -> None:
+    from vidscribe.pipeline import _parse_screen_events
+
+    # ts slightly outside: clamp expected
+    events = _parse_screen_events(
+        {"screen_events": [{"ts": -2.0, "description": "early"}, {"ts": 15.0, "description": "late"}]},
+        chunk_start=0.0,
+        chunk_end=10.0,
+    )
+    assert len(events) == 2
+    assert events[0].ts == 0.0   # clamped from -2
+    assert events[1].ts == 10.0  # clamped from 15
+
+
+def test_parse_screen_events_drops_ts_far_outside_window() -> None:
+    from vidscribe.pipeline import _parse_screen_events
+
+    # ts more than 5s outside → dropped
+    events = _parse_screen_events(
+        {"screen_events": [{"ts": -10.0, "description": "too early"}, {"ts": 100.0, "description": "too late"}]},
+        chunk_start=0.0,
+        chunk_end=10.0,
+    )
+    assert events == []
+
+
+def test_parse_screen_events_keeps_ts_within_window() -> None:
+    from vidscribe.pipeline import _parse_screen_events
+
+    events = _parse_screen_events(
+        {"screen_events": [{"ts": 5.0, "description": "normal"}]},
+        chunk_start=0.0,
+        chunk_end=10.0,
+    )
+    assert len(events) == 1
+    assert events[0].ts == 5.0
+
+
+# ---------------------------------------------------------------------------
+# C: speaker_map cross-lookup tests
+# ---------------------------------------------------------------------------
+
+def test_speaker_name_maps_speaker_xx_key_to_name() -> None:
+    from vidscribe.assembler import _speaker_name
+
+    assert _speaker_name("SPEAKER_01", {"SPEAKER_01": "Алексей"}) == "Алексей"
+
+
+def test_speaker_name_cross_lookup_sxx_id_against_speaker_xx_key() -> None:
+    from vidscribe.assembler import _speaker_name
+
+    # speaker_id uses sXX, map uses SPEAKER_XX
+    assert _speaker_name("s01", {"SPEAKER_01": "Алексей"}) == "Алексей"
+
+
+def test_speaker_name_cross_lookup_speaker_xx_id_against_sxx_key() -> None:
+    from vidscribe.assembler import _speaker_name
+
+    # speaker_id uses SPEAKER_XX, map uses sXX
+    assert _speaker_name("SPEAKER_01", {"s01": "Алексей"}) == "Алексей"
+
+
+def test_assemble_markdown_uses_speaker_map_name_in_header() -> None:
+    """When speaker_map contains sXX keys, header should show the mapped name."""
+    # segments use SPEAKER_XX (raw STT), map uses sXX keys
+    chunk = CorrectedChunk(
+        idx=0,
+        start=0,
+        end=5,
+        speaker="SPEAKER_00",
+        corrected_text="Привет.",
+        segments=[
+            CorrectedSegment(start=0, end=5, speaker="SPEAKER_00", corrected_text="Привет."),
+        ],
+    )
+    result = assemble([chunk], {"s00": "Иван"})
+    assert "**Иван**" in result
+    assert "**SPEAKER_00**" not in result
+    assert "**s00**" not in result
