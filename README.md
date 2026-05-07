@@ -41,7 +41,7 @@
 
 ## Status
 
-MVP pipeline реализован, mix-mode добавлен, 114 unit-тестов зелёные.
+MVP pipeline реализован, mix-mode добавлен, 168 unit-тестов зелёные.
 План разработки: `docs/plans/completed/2026-05-06-mvp-pipeline.md`.
 
 ## Installation
@@ -108,7 +108,8 @@ chunk_strategy = "speaker"
 frame_rate = 0.1
 whisper_model = "noscribe-precise"
 language = "ru"
-cache_dir = ".vidscribe"
+# cache_dir defaults to the platform cache location; uncomment to override:
+# cache_dir = "/path/to/custom/cache"
 ```
 
 Global options may be passed before a subcommand: `--provider`, `--model`,
@@ -119,12 +120,32 @@ Global options may be passed before a subcommand: `--provider`, `--model`,
 `0.1` means one sampled frame every 10 seconds. Higher values provide more visual
 context and increase provider prompt size.
 
+### Cache directory
+
+Pipeline artefacts and logs are stored in a global user cache directory.
+Default location:
+
+- **macOS:** `~/Library/Caches/vidscribe`
+- **Linux:** `${XDG_CACHE_HOME:-~/.cache}/vidscribe`
+- **Windows:** `%LOCALAPPDATA%/vidscribe/cache`
+
+Logs live in the same directory under a `logs/` subdirectory.
+
+Override via CLI flag or environment variable:
+
+```bash
+vidscribe --cache-dir /path/to/cache pipeline recording.mp4
+# or
+export VIDSCRIBE_CACHE_DIR=/path/to/cache
+```
+
 Supported environment variables:
 
 ```bash
 export VIDSCRIBE_PROVIDER=claude
 export VIDSCRIBE_MODEL=sonnet
 export HF_TOKEN=hf_...
+export VIDSCRIBE_CACHE_DIR=/path/to/cache   # override cache/logs location
 ```
 
 ## Quick start
@@ -298,7 +319,7 @@ See `docs/architecture.md` for the pipeline diagram and artifact layout.
 Issues / PRs welcome. Workflow:
 
 ```bash
-.venv/bin/pytest -q       # 114 passing
+.venv/bin/pytest -q       # 168 passing
 .venv/bin/ruff check      # lint clean
 ```
 
