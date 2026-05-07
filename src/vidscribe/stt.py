@@ -187,16 +187,30 @@ def transcribe(
         Optional :class:`~vidscribe.progress.PipelineProgress` instance.  When
         supplied a rich progress bar is shown on stderr for the STT stage.
     """
+    import time as _time
 
     resolved_device = _resolve_device(device)
     model_path, effective_model = _resolve_model_path(model)
     compute_type = "int8"
+
+    if pipeline_progress is not None:
+        pipeline_progress.log(
+            f"[2/9] STT: model={model}, device={resolved_device}, language={language}"
+        )
+        pipeline_progress.log("[2/9] STT loading model...")
+
+    t0_load = _time.monotonic()
     whisper_model_class = _whisper_model_class()
     whisper_model = whisper_model_class(
         str(model_path),
         device=resolved_device,
         compute_type=compute_type,
     )
+
+    if pipeline_progress is not None:
+        pipeline_progress.log(
+            f"[2/9] STT model loaded in {_time.monotonic() - t0_load:.1f}s"
+        )
 
     segments_iter, info = whisper_model.transcribe(
         str(audio_path),
@@ -218,6 +232,10 @@ def transcribe(
 
     segments: list[AsrSegment] = []
     words: list[AsrWord] = []
+    _last_logged: float = 0.0
+    _log_interval: float = 30.0  # log every 30 seconds of video time
+    t0_stt = _time.monotonic()
+
     with ctx as handle:
         for raw_segment in segments_iter:
             segment_words = [_word_from_raw(raw_word) for raw_word in raw_words(raw_segment)]
@@ -234,6 +252,30 @@ def transcribe(
             if on_progress is not None:
                 on_progress(end_s, _total or 0.0)
             handle.advance_to(end_s)
+
+            # Periodic progress log every ~30s of video time
+            if pipeline_progress is not None and end_s - _last_logged >= _log_interval:
+                _last_logged = end_s
+                if _total and _total > 0:
+                    pct = int(end_s / _total * 100)
+                    total_mm = int(_total // 60)
+                    total_ss = int(_total % 60)
+                    cur_mm = int(end_s // 60)
+                    cur_ss = int(end_s % 60)
+                    pipeline_progress.log(
+                        f"[2/9] STT segment {cur_mm}:{cur_ss:02d}/{total_mm}:{total_ss:02d}"
+                        f" ({pct}%)"
+                    )
+                else:
+                    pipeline_progress.log(f"[2/9] STT segment at {end_s:.0f}s")
+
+    if pipeline_progress is not None:
+        elapsed = _time.monotonic() - t0_stt
+        mm, ss = divmod(int(elapsed), 60)
+        pipeline_progress.log(
+            f"[2/9] STT done in {mm}:{ss:02d}, {len(segments)} segments, "
+            f"{sum(len(seg.words) for seg in segments)} words"
+        )
 
     detected_language = getattr(info, "language", None)
     return AsrResult(
@@ -265,6 +307,8 @@ def diarize(
         show a spinner for the diarization stage.
     """
 
+    import time as _time
+
     pipeline_class = _pyannote_pipeline_class()
     call_kwargs: dict[str, Any] = {}
 
@@ -276,6 +320,12 @@ def diarize(
 
     waveform = _load_waveform(audio_path)
 
+    diar_source = "local noScribe pipeline" if assets is not None else "pyannote/speaker-diarization-3.1"
+    if pipeline_progress is not None:
+        pipeline_progress.log(f"[3/9] Diarization: pyannote ({diar_source})")
+        pipeline_progress.log("[3/9] Diarization loading pipeline...")
+
+    t0_diar = _time.monotonic()
     ctx = (
         pipeline_progress.stage("diar")
         if pipeline_progress is not None
@@ -287,15 +337,31 @@ def diarize(
             with tempfile.TemporaryDirectory(prefix="vidscribe-pyannote-") as temp_dir:
                 config_path = _patched_pyannote_config(assets, Path(temp_dir))
                 pipeline = pipeline_class.from_pretrained(str(config_path))
+                if pipeline_progress is not None:
+                    pipeline_progress.log("[3/9] Diarization running...")
                 annotation = pipeline(waveform, **call_kwargs)
         else:
             pipeline = pipeline_class.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
                 use_auth_token=hf_token,
             )
+            if pipeline_progress is not None:
+                pipeline_progress.log("[3/9] Diarization running...")
             annotation = pipeline(waveform, **call_kwargs)
 
-    return DiarResult(turns=_turns_from_annotation(annotation))
+    result = DiarResult(turns=_turns_from_annotation(annotation))
+
+    if pipeline_progress is not None:
+        elapsed = _time.monotonic() - t0_diar
+        mm, ss = divmod(int(elapsed), 60)
+        speakers_found = sorted({turn.speaker for turn in result.turns})
+        pipeline_progress.log(
+            f"[3/9] Diarization done in {mm}:{ss:02d}, "
+            f"{len(speakers_found)} speaker(s) detected"
+            + (f" ({', '.join(speakers_found)})" if speakers_found else "")
+        )
+
+    return result
 
 
 def merge_asr_diar(asr: AsrResult, diar: DiarResult) -> SttResult:
