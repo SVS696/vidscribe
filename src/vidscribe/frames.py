@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import select as _select
 import subprocess
 import time as _time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -34,28 +35,25 @@ _METADATA_FRAME_RE = re.compile(r"frame:\s*(?P<frame>\d+).*pts_time:(?P<ts>[-\d.
 _SCENE_SCORE_RE = re.compile(r"lavfi\.scene_score=(?P<score>[-\d.]+)")
 _PROGRESS_OTIME_RE = re.compile(r"^out_time_us=(\d+)")
 
+STUCK_TIMEOUT: float = 120.0  # seconds without out_time_us change before killing ffmpeg
 
-def extract(
-    video_path: Path | str,
-    out_dir: Path | str,
-    scene_threshold: float = 0.3,
-    sample_every: float = 10.0,
-    *,
-    pipeline_progress: "PipelineProgress | None" = None,
-) -> list[FrameInfo]:
-    """Extract scene-change and sampled frames with ffmpeg."""
 
-    video = Path(video_path)
-    output_dir = Path(out_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+FramesStrategy = Literal["auto", "scene-detect", "sample-only"]
 
-    output_pattern = output_dir / "frame-%06d.jpg"
+
+def _build_scene_detect_command(
+    video: Path,
+    output_pattern: Path,
+    scene_threshold: float,
+    sample_every: float,
+) -> list[str]:
+    """Return ffmpeg command using scene-detect + uniform sampling filter."""
     select_filter = (
         f"select='eq(n,0)+gt(scene,{scene_threshold})+"
         f"isnan(prev_selected_t)+gte(t-prev_selected_t,{sample_every})',"
         "metadata=print:key=lavfi.scene_score,showinfo"
     )
-    command = [
+    return [
         "ffmpeg",
         "-y",
         "-i",
@@ -70,8 +68,103 @@ def extract(
         str(output_pattern),
     ]
 
-    ctx = pipeline_progress.stage("frames") if pipeline_progress is not None else _null_stage()
 
+def _build_sample_only_command(
+    video: Path,
+    output_pattern: Path,
+    sample_every: float,
+) -> list[str]:
+    """Return simpler ffmpeg command using only uniform sampling (no scene-detect)."""
+    select_filter = (
+        f"select='eq(n,0)+gte(t-prev_selected_t,{sample_every})',showinfo"
+    )
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video),
+        "-vf",
+        select_filter,
+        "-fps_mode",
+        "vfr",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        str(output_pattern),
+    ]
+
+
+def _run_ffmpeg_once(
+    command: list[str],
+    video: Path,
+    output_dir: Path,
+    total_seconds: float,
+    pipeline_progress: "PipelineProgress | None",
+    stuck_timeout: float,
+) -> str:
+    """Run one ffmpeg invocation and return stderr text.
+
+    Raises :exc:`FrameExtractionError` on non-zero exit or watchdog trigger.
+    """
+    try:
+        proc = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise FrameExtractionError(
+            "ffmpeg was not found. Install ffmpeg and make sure it is on PATH."
+        ) from exc
+
+    stdout_lines: list[str] = []
+    _read_frames_progress(
+        proc,
+        total_seconds=total_seconds,
+        pipeline_progress=pipeline_progress,
+        output_dir=output_dir,
+        stdout_lines=stdout_lines,
+        stuck_timeout=stuck_timeout,
+    )
+
+    stderr_text = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
+    returncode = proc.wait()
+    if returncode != 0:
+        details = stderr_text.strip()
+        message = f"ffmpeg failed to extract frames from {video}"
+        if details:
+            message = f"{message}: {details}"
+        raise FrameExtractionError(message)
+
+    return stderr_text
+
+
+def extract(
+    video_path: Path | str,
+    out_dir: Path | str,
+    scene_threshold: float = 0.3,
+    sample_every: float = 10.0,
+    *,
+    pipeline_progress: "PipelineProgress | None" = None,
+    frames_strategy: "FramesStrategy" = "auto",
+    stuck_timeout: float = STUCK_TIMEOUT,
+) -> list[FrameInfo]:
+    """Extract scene-change and sampled frames with ffmpeg.
+
+    ``frames_strategy`` controls which extraction filter is used:
+    - ``"auto"`` (default): try scene-detect first, fall back to sample-only on failure/timeout.
+    - ``"scene-detect"``: always use scene-detect filter; no fallback.
+    - ``"sample-only"``: skip scene-detect, use uniform sampling only.
+    """
+
+    video = Path(video_path)
+    output_dir = Path(out_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_pattern = output_dir / "frame-%06d.jpg"
+
+    ctx = pipeline_progress.stage("frames") if pipeline_progress is not None else _null_stage()
     total_seconds = _probe_duration(video)
 
     if pipeline_progress is not None:
@@ -89,54 +182,68 @@ def extract(
             )
     t0 = _time.monotonic()
 
-    try:
-        proc = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    except FileNotFoundError as exc:
-        raise FrameExtractionError(
-            "ffmpeg was not found. Install ffmpeg and make sure it is on PATH."
-        ) from exc
+    use_scene_detect = frames_strategy in ("auto", "scene-detect")
+    use_fallback = frames_strategy == "auto"
 
-    # Read progress from stdout; stderr holds frame metadata — read after completion
-    stdout_lines: list[str] = []
     with ctx:
-        _read_frames_progress(
-            proc,
-            total_seconds=total_seconds,
-            pipeline_progress=pipeline_progress,
-            output_dir=output_dir,
-            stdout_lines=stdout_lines,
-        )
-
-    stderr_text = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
-    returncode = proc.wait()
-    if returncode != 0:
-        details = stderr_text.strip()
-        message = f"ffmpeg failed to extract frames from {video}"
-        if details:
-            message = f"{message}: {details}"
-        raise FrameExtractionError(message)
+        if use_scene_detect:
+            command = _build_scene_detect_command(video, output_pattern, scene_threshold, sample_every)
+            try:
+                stderr_text = _run_ffmpeg_once(
+                    command, video, output_dir, total_seconds, pipeline_progress, stuck_timeout
+                )
+                fallback_used = False
+            except FrameExtractionError:
+                if not use_fallback:
+                    raise
+                # scene-detect failed or timed out — retry with sample-only
+                if pipeline_progress is not None:
+                    pipeline_progress.log(
+                        "[5/9] Frames: scene-detect failed/timed-out, retrying with sample-only strategy"
+                    )
+                # Clean up any partially extracted frames before retry
+                for partial in output_dir.glob("frame-*.jpg"):
+                    try:
+                        partial.unlink()
+                    except OSError:
+                        pass
+                fallback_cmd = _build_sample_only_command(video, output_pattern, sample_every)
+                stderr_text = _run_ffmpeg_once(
+                    fallback_cmd, video, output_dir, total_seconds, pipeline_progress, stuck_timeout
+                )
+                fallback_used = True
+        else:
+            # sample-only, no scene-detect
+            command = _build_sample_only_command(video, output_pattern, sample_every)
+            stderr_text = _run_ffmpeg_once(
+                command, video, output_dir, total_seconds, pipeline_progress, stuck_timeout
+            )
+            fallback_used = False
 
     frames = _frames_from_ffmpeg_log(
         stderr_text,
         output_dir=output_dir,
+        # In sample-only mode scene_score will be absent, treat all as non-scene-change
         scene_threshold=scene_threshold,
     )
     _write_frames_json(output_dir / "frames.json", frames)
 
     if pipeline_progress is not None:
         elapsed = _time.monotonic() - t0
-        n_scene = sum(1 for f in frames if f.scene_change)
-        n_sampled = len(frames) - n_scene
-        pipeline_progress.log(
-            f"[5/9] Frames done in {elapsed:.1f}s"
-            f" | {len(frames)} frames extracted"
-            f" ({n_scene} scene-changes + {n_sampled} sampled)"
-        )
+        if fallback_used:
+            pipeline_progress.log(
+                f"[5/9] Frames done in {elapsed:.1f}s"
+                f" | {len(frames)} frames (sample-only fallback)"
+                f" | elapsed {elapsed:.1f}s"
+            )
+        else:
+            n_scene = sum(1 for f in frames if f.scene_change)
+            n_sampled = len(frames) - n_scene
+            pipeline_progress.log(
+                f"[5/9] Frames done in {elapsed:.1f}s"
+                f" | {len(frames)} frames extracted"
+                f" ({n_scene} scene-changes + {n_sampled} sampled)"
+            )
 
     return frames
 
@@ -148,25 +255,74 @@ def _read_frames_progress(
     pipeline_progress: "PipelineProgress | None",
     output_dir: Path,
     stdout_lines: list[str],
+    stuck_timeout: float = STUCK_TIMEOUT,
 ) -> None:
-    """Read ffmpeg progress from stdout, logging every ~2 real-time seconds."""
+    """Read ffmpeg progress from stdout, logging every ~2 real-time seconds.
+
+    Uses non-blocking I/O (select) so the loop does not hang when ffmpeg stalls.
+    If ``out_time_us`` does not advance for ``stuck_timeout`` seconds the
+    subprocess is killed and :exc:`FrameExtractionError` is raised.
+    """
     if proc.stdout is None:
         return
 
     out_time_us: int = 0
     _last_log: float = _time.monotonic()
     _log_interval: float = 2.0
+    last_progress_at: float = _time.monotonic()
+    # Buffer for partial lines when using non-blocking reads
+    _line_buf: str = ""
 
-    for line in proc.stdout:
-        line = line.strip()
-        stdout_lines.append(line)
-        m = _PROGRESS_OTIME_RE.match(line)
-        if m:
-            try:
-                out_time_us = int(m.group(1))
-            except ValueError:
-                pass
+    while proc.poll() is None:
+        now = _time.monotonic()
 
+        # Non-blocking read with 1 s timeout so we can check the watchdog
+        try:
+            ready, _, _ = _select.select([proc.stdout], [], [], 1.0)
+        except (ValueError, OSError):
+            # stdout already closed
+            break
+
+        if ready:
+            chunk = proc.stdout.read(4096)  # type: ignore[arg-type]
+            if not chunk:
+                break
+            _line_buf += chunk
+            # Process all complete lines
+            while "\n" in _line_buf:
+                line, _line_buf = _line_buf.split("\n", 1)
+                line = line.strip()
+                stdout_lines.append(line)
+                m = _PROGRESS_OTIME_RE.match(line)
+                if m:
+                    try:
+                        new_val = int(m.group(1))
+                    except ValueError:
+                        new_val = out_time_us
+                    if new_val != out_time_us:
+                        out_time_us = new_val
+                        last_progress_at = _time.monotonic()
+        else:
+            # Timeout — no data from ffmpeg. Check watchdog.
+            now = _time.monotonic()
+            if now - last_progress_at > stuck_timeout:
+                audio_s = out_time_us / 1_000_000
+                mm, ss = divmod(int(audio_s), 60)
+                hh, mm = divmod(mm, 60)
+                stuck_at = f"{hh}:{mm:02d}:{ss:02d}" if hh else f"{mm}:{ss:02d}"
+                if pipeline_progress is not None:
+                    pipeline_progress.log(
+                        f"[5/9] FFmpeg stuck at {stuck_at} for {stuck_timeout:.0f}s — killing subprocess"
+                    )
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                raise FrameExtractionError(
+                    f"ffmpeg stuck at {stuck_at} for {stuck_timeout:.0f}s, killed"
+                )
+
+        # Periodic progress log
         if pipeline_progress is not None:
             now = _time.monotonic()
             if now - _last_log >= _log_interval:
@@ -189,6 +345,24 @@ def _read_frames_progress(
                     pipeline_progress.log(
                         f"[5/9] Frames: {proc_str} processed | {n_so_far} frames so far"
                     )
+
+    # Drain any remaining data after process exited
+    if proc.stdout is not None:
+        remaining = proc.stdout.read()
+        if remaining:
+            _line_buf += remaining
+        for line in _line_buf.splitlines():
+            line = line.strip()
+            if line:
+                stdout_lines.append(line)
+                m = _PROGRESS_OTIME_RE.match(line)
+                if m:
+                    try:
+                        new_val = int(m.group(1))
+                        if new_val != out_time_us:
+                            out_time_us = new_val
+                    except ValueError:
+                        pass
 
 
 def _probe_duration(video: Path) -> float:
