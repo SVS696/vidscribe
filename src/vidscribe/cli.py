@@ -524,9 +524,9 @@ def logs_command(
 
     if follow:
         if log_path is None:
-            console.print("No log files found in .vidscribe/logs/", err=True)
+            typer.echo("No log files found in vidscribe logs directory", err=True)
             raise typer.Exit(1)
-        console.print(f"Following: {log_path}", err=True)
+        typer.echo(f"Following: {log_path}", err=True)
         try:
             subprocess.run(["tail", "-f", str(log_path)], check=False)
         except KeyboardInterrupt:
