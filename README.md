@@ -314,6 +314,23 @@ cached STT and frame artifacts.
 
 See `docs/architecture.md` for the pipeline diagram and artifact layout.
 
+## Claude Code skill
+
+Если используешь Claude Code — есть skill-обёртка которая декодирует
+естественный запрос юзера в правильную команду (включая mix-mode,
+screen-context, frames-strategy, multi-video concat и т.д.). Установка:
+
+```bash
+mkdir -p ~/.claude/skills/vidscribe
+cp docs/skill.md ~/.claude/skills/vidscribe/SKILL.md
+# или symlink, чтобы git pull обновлял активный skill:
+ln -sf "$(pwd)/docs/skill.md" ~/.claude/skills/vidscribe/SKILL.md
+```
+
+После установки в Claude Code можно просто говорить «распознай видео X» или
+«видео битое, прогони с seek-стратегией» — Claude сам соберёт нужную
+`vidscribe` команду по skill recipes.
+
 ## Contributing
 
 Issues / PRs welcome. Workflow:
