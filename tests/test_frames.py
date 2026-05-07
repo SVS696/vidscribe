@@ -1,7 +1,7 @@
 import json
 import shutil
-import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,27 +16,33 @@ FFMPEG_LOG = """
 """
 
 
+def _make_mock_proc(returncode: int = 0, stderr: str = FFMPEG_LOG) -> MagicMock:
+    """Build a mock Popen process for frames tests."""
+    proc = MagicMock()
+    proc.returncode = returncode
+    proc.stdout.__iter__ = lambda self: iter([])
+    proc.stdout.read = lambda: ""
+    proc.stderr.read = lambda: stderr
+    proc.wait = lambda: returncode
+    return proc
+
+
 def test_extract_runs_ffmpeg_with_scene_and_sampling_filter(tmp_path, mocker) -> None:
-    run = mocker.patch(
-        "vidscribe.frames.subprocess.run",
-        return_value=subprocess.CompletedProcess(
-            args=["ffmpeg"],
-            returncode=0,
-            stdout="",
-            stderr=FFMPEG_LOG,
-        ),
-    )
+    mock_proc = _make_mock_proc()
+    popen = mocker.patch("vidscribe.frames.subprocess.Popen", return_value=mock_proc)
     video = tmp_path / "input.mp4"
 
     frames = extract(video, tmp_path / "frames", scene_threshold=0.3, sample_every=10.0)
 
-    command = run.call_args.args[0]
+    command = popen.call_args.args[0]
     assert command[:4] == ["ffmpeg", "-y", "-i", str(video)]
     assert command[4] == "-vf"
     assert "gt(scene,0.3)" in command[5]
     assert "gte(t-prev_selected_t,10.0)" in command[5]
     assert "metadata=print:key=lavfi.scene_score" in command[5]
-    assert command[-2:] == ["vfr", str(tmp_path / "frames" / "frame-%06d.jpg")]
+    assert "-progress" in command
+    assert "pipe:1" in command
+    assert command[-1] == str(tmp_path / "frames" / "frame-%06d.jpg")
     assert frames == [
         FrameInfo(ts=0.0, path=tmp_path / "frames" / "frame-000001.jpg", scene_change=False),
         FrameInfo(ts=1.0, path=tmp_path / "frames" / "frame-000002.jpg", scene_change=True),
@@ -44,15 +50,7 @@ def test_extract_runs_ffmpeg_with_scene_and_sampling_filter(tmp_path, mocker) ->
 
 
 def test_extract_persists_frames_json(tmp_path, mocker) -> None:
-    mocker.patch(
-        "vidscribe.frames.subprocess.run",
-        return_value=subprocess.CompletedProcess(
-            args=["ffmpeg"],
-            returncode=0,
-            stdout="",
-            stderr=FFMPEG_LOG,
-        ),
-    )
+    mocker.patch("vidscribe.frames.subprocess.Popen", return_value=_make_mock_proc())
     out_dir = tmp_path / "frames"
 
     extract(tmp_path / "input.mp4", out_dir)
@@ -69,15 +67,13 @@ def test_extract_uses_existing_generated_image_paths(tmp_path, mocker) -> None:
     out_dir.mkdir()
     generated = out_dir / "frame-000001.jpg"
     generated.write_bytes(b"jpg")
+    stderr_log = (
+        "[Parsed_metadata_1 @ 0x123] frame:0 pts:0 pts_time:2.5\n"
+        "[Parsed_metadata_1 @ 0x123] lavfi.scene_score=0.100000\n"
+    )
     mocker.patch(
-        "vidscribe.frames.subprocess.run",
-        return_value=subprocess.CompletedProcess(
-            args=["ffmpeg"],
-            returncode=0,
-            stdout="",
-            stderr="[Parsed_metadata_1 @ 0x123] frame:0 pts:0 pts_time:2.5\n"
-            "[Parsed_metadata_1 @ 0x123] lavfi.scene_score=0.100000\n",
-        ),
+        "vidscribe.frames.subprocess.Popen",
+        return_value=_make_mock_proc(stderr=stderr_log),
     )
 
     frames = extract(tmp_path / "input.mp4", out_dir)
@@ -87,19 +83,15 @@ def test_extract_uses_existing_generated_image_paths(tmp_path, mocker) -> None:
 
 
 def test_extract_raises_helpful_error_when_ffmpeg_is_missing(tmp_path, mocker) -> None:
-    mocker.patch("vidscribe.frames.subprocess.run", side_effect=FileNotFoundError)
+    mocker.patch("vidscribe.frames.subprocess.Popen", side_effect=FileNotFoundError)
 
     with pytest.raises(FrameExtractionError, match="ffmpeg was not found"):
         extract(tmp_path / "input.mp4", tmp_path / "frames")
 
 
 def test_extract_includes_ffmpeg_error_details(tmp_path, mocker) -> None:
-    error = subprocess.CalledProcessError(
-        returncode=1,
-        cmd=["ffmpeg"],
-        stderr="Invalid data found when processing input",
-    )
-    mocker.patch("vidscribe.frames.subprocess.run", side_effect=error)
+    mock_proc = _make_mock_proc(returncode=1, stderr="Invalid data found when processing input")
+    mocker.patch("vidscribe.frames.subprocess.Popen", return_value=mock_proc)
 
     with pytest.raises(FrameExtractionError, match="Invalid data"):
         extract(tmp_path / "broken.mp4", tmp_path / "frames")
