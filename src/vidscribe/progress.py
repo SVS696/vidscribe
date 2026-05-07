@@ -5,9 +5,11 @@ All output goes to stderr so that stdout (provider JSON) is never polluted.
 
 from __future__ import annotations
 
+import sys
 import time
 from contextlib import contextmanager
-from typing import Generator
+from pathlib import Path
+from typing import TYPE_CHECKING, Generator, TextIO
 
 from rich.console import Console
 from rich.progress import (
@@ -20,6 +22,9 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
+
+if TYPE_CHECKING:
+    pass
 
 _STDERR_CONSOLE = Console(stderr=True)
 
@@ -49,9 +54,25 @@ class PipelineProgress:
                     task.advance(seg.end)
     """
 
-    def __init__(self, *, quiet: bool = False, console: Console | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        quiet: bool = False,
+        console: Console | None = None,
+        log_file: Path | None = None,
+    ) -> None:
         self._quiet = quiet
-        self._console = console or _STDERR_CONSOLE
+        self._log_handle: TextIO | None = None
+
+        if log_file is not None:
+            from vidscribe.logging_setup import TeeWriter, open_log_file
+
+            self._log_handle = open_log_file(log_file)
+            tee = TeeWriter(sys.stderr, self._log_handle)
+            self._console = Console(file=tee, highlight=False)
+        else:
+            self._console = console or _STDERR_CONSOLE
+
         self._progress: Progress | None = None
         self._stage_tasks: dict[str, TaskID] = {}
 
@@ -78,6 +99,12 @@ class PipelineProgress:
         if self._progress is not None:
             self._progress.__exit__(*args)
             self._progress = None
+        if self._log_handle is not None:
+            try:
+                self._log_handle.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._log_handle = None
 
     # ------------------------------------------------------------------
     # Stage helpers
