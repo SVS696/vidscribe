@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time as _time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
@@ -19,6 +20,23 @@ from vidscribe.provider import Provider, ProviderResponse
 
 if TYPE_CHECKING:
     from vidscribe.progress import PipelineProgress
+
+
+def _fmt_seconds(seconds: float) -> str:
+    """Format seconds as M:SS."""
+    total = max(0, int(seconds))
+    mm, ss = divmod(total, 60)
+    return f"{mm}:{ss:02d}"
+
+
+def _fmt_chunk_ts(start: float, end: float) -> str:
+    """Format chunk start-end as HH:MM:SS→HH:MM:SS."""
+    def _hms(s: float) -> str:
+        t = max(0, int(s))
+        hh, rem = divmod(t, 3600)
+        mm, ss = divmod(rem, 60)
+        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+    return f"{_hms(start)}→{_hms(end)}"
 
 
 class CorrectionError(RuntimeError):
@@ -92,6 +110,20 @@ def correct_chunks(
         base_desc = f"{base_desc}/{provider_model}"
     base_desc = f"{base_desc})"
 
+    is_mix = visual_provider is not None
+    if pipeline_progress is not None:
+        if is_mix:
+            vp_name = visual_provider.__class__.__name__  # type: ignore[union-attr]
+            vp_model = getattr(visual_provider, "model", None) or ""
+            vp_desc = f"{vp_name}/{vp_model}" if vp_model else vp_name
+            tp_desc = f"{provider_name}/{provider_model}" if provider_model else provider_name
+            pipeline_progress.log(
+                f"[8/9] Correction loop: mix mode ({tp_desc} → {vp_desc})"
+            )
+        else:
+            tp_desc = f"{provider_name}/{provider_model}" if provider_model else provider_name
+            pipeline_progress.log(f"[8/9] Correction loop: single mode ({tp_desc})")
+
     if pipeline_progress is not None:
         ctx = pipeline_progress.stage("correct", total=len(chunks), description=base_desc)
     else:
@@ -99,12 +131,20 @@ def correct_chunks(
         output_console = console or Console()
         ctx = _legacy_progress_stage(output_console, len(chunks))
 
+    # Track chunk timings for ETA
+    chunk_times: list[float] = []
+    t0_loop = _time.monotonic()
+
     with ctx as handle:
         for chunk_idx, chunk in enumerate(chunks):
+            n_total = len(chunks)
+            chunk_label = f"Chunk {chunk_idx + 1}/{n_total}"
+            ts_range = _fmt_chunk_ts(chunk.start, chunk.end)
+
             # For mix mode, update description to show current pass info
-            if visual_provider is not None and pipeline_progress is not None:
+            if is_mix and pipeline_progress is not None:
                 handle.update_description(
-                    f"{base_desc} — chunk {chunk_idx + 1}/{len(chunks)}"
+                    f"{base_desc} — chunk {chunk_idx + 1}/{n_total}"
                 )
 
             glossary_snapshot = dict(glossary)
@@ -119,21 +159,56 @@ def correct_chunks(
                 screen_context_mode=screen_context_mode,
             )
             cached = cache.get("corrected", cache_key) if cache and cache_key else None
+
+            t0_chunk = _time.monotonic()
+
             if cached is not None:
                 corrected_chunk = CorrectedChunk.model_validate(cached)
-            elif visual_provider is not None:
+                if pipeline_progress is not None:
+                    pipeline_progress.log(
+                        f"[8/9] {chunk_label} [{ts_range}]: cache hit"
+                    )
+            elif is_mix:
+                if pipeline_progress is not None:
+                    tp_desc_short = f"{provider_name}/{provider_model}" if provider_model else provider_name
+                    pipeline_progress.log(
+                        f"[8/9] {chunk_label} [{ts_range}]: text pass ({tp_desc_short})..."
+                    )
+                t0_text = _time.monotonic()
                 corrected_chunk = _correct_chunk_mix(
                     chunk=chunk,
                     text_provider=provider,
-                    visual_provider=visual_provider,
+                    visual_provider=visual_provider,  # type: ignore[arg-type]
                     speakers=speakers,
                     glossary=glossary_snapshot,
                     timeout=timeout,
                     screen_context_mode=screen_context_mode,
+                    _on_text_done=lambda segs, t0=t0_text, ci=chunk_idx, nt=n_total, pp=pipeline_progress: (
+                        pp.log(
+                            f"[8/9] Chunk {ci + 1}/{nt}: text pass done in {_time.monotonic() - t0:.1f}s, {len(segs)} segments"
+                        ) if pp is not None else None
+                    ) or None,
+                    _on_visual_start=lambda fps, ci=chunk_idx, nt=n_total, pp=pipeline_progress, vp=visual_provider: (
+                        pp.log(
+                            f"[8/9] Chunk {ci + 1}/{nt}: visual pass ({vp.__class__.__name__}/{getattr(vp, 'model', '') or ''}, {len(fps)} frames)..."
+                        ) if pp is not None else None
+                    ) or None,
+                    _on_visual_done=lambda evts, t0_v=None, ci=chunk_idx, nt=n_total, pp=pipeline_progress: None,
                 )
+                if pipeline_progress is not None:
+                    visual_dur = corrected_chunk.duration_s
+                    n_evts = len(corrected_chunk.screen_events)
+                    pipeline_progress.log(
+                        f"[8/9] {chunk_label}: visual pass done in {visual_dur:.1f}s, {n_evts} screen events"
+                    )
                 if cache is not None and cache_key is not None:
                     cache.set("corrected", cache_key, corrected_chunk)
             else:
+                if pipeline_progress is not None:
+                    tp_desc_short = f"{provider_name}/{provider_model}" if provider_model else provider_name
+                    pipeline_progress.log(
+                        f"[8/9] {chunk_label} [{ts_range}]: correcting ({tp_desc_short})..."
+                    )
                 corrected_chunk = _correct_chunk(
                     chunk=chunk,
                     provider=provider,
@@ -142,12 +217,40 @@ def correct_chunks(
                     timeout=timeout,
                     screen_context_mode=screen_context_mode,
                 )
+                if pipeline_progress is not None:
+                    chunk_dur = corrected_chunk.duration_s
+                    n_segs = len(corrected_chunk.segments)
+                    pipeline_progress.log(
+                        f"[8/9] {chunk_label}: done in {chunk_dur:.1f}s, {n_segs} segments"
+                    )
                 if cache is not None and cache_key is not None:
                     cache.set("corrected", cache_key, corrected_chunk)
+
+            chunk_elapsed = _time.monotonic() - t0_chunk
+            chunk_times.append(chunk_elapsed)
 
             glossary.update(corrected_chunk.glossary_delta)
             corrected.append(corrected_chunk)
             handle.advance()
+
+            # ETA log every chunk (show only if not from cache)
+            if pipeline_progress is not None and cached is None:
+                remaining = n_total - (chunk_idx + 1)
+                if remaining > 0 and chunk_times:
+                    avg_t = sum(chunk_times) / len(chunk_times)
+                    eta_s = avg_t * remaining
+                    pipeline_progress.log(
+                        f"[8/9] {chunk_label} done | "
+                        f"avg {avg_t:.1f}s/chunk | "
+                        f"ETA ~{_fmt_seconds(eta_s)} ({remaining} left)"
+                    )
+
+    if pipeline_progress is not None:
+        loop_elapsed = _time.monotonic() - t0_loop
+        mm, ss = divmod(int(loop_elapsed), 60)
+        pipeline_progress.log(
+            f"[8/9] Correction loop done in {mm}:{ss:02d}"
+        )
 
     return corrected
 
@@ -161,6 +264,9 @@ def _correct_chunk_mix(
     glossary: Mapping[str, str],
     timeout: int,
     screen_context_mode: str = "off",
+    _on_text_done: Any = None,
+    _on_visual_start: Any = None,
+    _on_visual_done: Any = None,
 ) -> CorrectedChunk:
     """Two-pass mix-mode correction: text-only pass then visual-context pass."""
 
@@ -179,7 +285,13 @@ def _correct_chunk_mix(
         text_payload, "corrected_text", required=True
     )
 
+    if _on_text_done is not None:
+        _on_text_done(text_segments)
+
     # Pass 2: visual correction (receives frames + both transcripts)
+    if _on_visual_start is not None:
+        _on_visual_start(frame_paths)
+
     enable_screen_context = screen_context_mode != "off"
     visual_prompt = render(
         "correct_chunk_visual",
