@@ -15,15 +15,40 @@ FFMPEG_LOG = """
 [Parsed_metadata_1 @ 0x123] lavfi.scene_score=0.420000
 """
 
+SAMPLE_ONLY_LOG = """
+[Parsed_showinfo @ 0x456] n:   0 pts:      0 pts_time:0.000000
+[Parsed_showinfo @ 0x456] n:   1 pts:  10240 pts_time:1.000000
+"""
+
 
 def _make_mock_proc(returncode: int = 0, stderr: str = FFMPEG_LOG) -> MagicMock:
-    """Build a mock Popen process for frames tests."""
+    """Build a mock Popen process for frames tests.
+
+    poll() returns the returncode immediately so the _read_frames_progress
+    while-loop exits right away (simulates instant process completion).
+    """
     proc = MagicMock()
     proc.returncode = returncode
+    proc.poll.return_value = returncode  # non-None → loop exits immediately
     proc.stdout.__iter__ = lambda self: iter([])
-    proc.stdout.read = lambda: ""
-    proc.stderr.read = lambda: stderr
-    proc.wait = lambda: returncode
+    proc.stdout.read.return_value = ""
+    proc.stderr.read.return_value = stderr
+    proc.wait.return_value = returncode
+    return proc
+
+
+def _make_stuck_proc() -> MagicMock:
+    """Build a mock process that never advances out_time_us (stuck ffmpeg).
+
+    poll() returns None so the read-loop keeps running, and select always
+    times out (no data), triggering the watchdog.
+    """
+    proc = MagicMock()
+    proc.returncode = None
+    proc.poll.return_value = None  # process appears to still be running
+    proc.stdout.read.return_value = ""
+    proc.stderr.read.return_value = ""
+    proc.wait.return_value = -9
     return proc
 
 
@@ -111,3 +136,117 @@ def test_extract_tiny_fixture_video(fixtures_path: Path, tmp_path) -> None:
     assert (tmp_path / "frames" / "frames.json").exists()
     assert frames[0].path.exists()
     assert frames[0].ts == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# Watchdog tests
+# ---------------------------------------------------------------------------
+
+
+def test_watchdog_kills_stuck_ffmpeg_and_raises(tmp_path, mocker) -> None:
+    """If out_time_us never advances the watchdog must kill the process."""
+    stuck_proc = _make_stuck_proc()
+    mocker.patch("vidscribe.frames.subprocess.Popen", return_value=stuck_proc)
+    mocker.patch("vidscribe.frames._probe_duration", return_value=0.0)
+    # select always returns empty ready-list (timeout) — no data ever arrives
+    mocker.patch("vidscribe.frames._select.select", return_value=([], [], []))
+
+    with pytest.raises(FrameExtractionError, match="stuck"):
+        # stuck_timeout=0 so the watchdog fires on the first idle iteration
+        # frames_strategy="scene-detect" disables fallback so the error propagates
+        extract(
+            tmp_path / "input.mp4",
+            tmp_path / "frames",
+            stuck_timeout=0,
+            frames_strategy="scene-detect",
+        )
+
+    stuck_proc.kill.assert_called_once()
+
+
+def test_watchdog_timeout_configurable_via_kwarg(tmp_path, mocker) -> None:
+    """stuck_timeout kwarg overrides the module-level STUCK_TIMEOUT constant."""
+    stuck_proc = _make_stuck_proc()
+    mocker.patch("vidscribe.frames.subprocess.Popen", return_value=stuck_proc)
+    mocker.patch("vidscribe.frames._probe_duration", return_value=0.0)
+    mocker.patch("vidscribe.frames._select.select", return_value=([], [], []))
+
+    # Very small timeout — must still raise FrameExtractionError, not hang
+    with pytest.raises(FrameExtractionError, match="stuck"):
+        extract(
+            tmp_path / "input.mp4",
+            tmp_path / "frames",
+            stuck_timeout=0,
+            frames_strategy="scene-detect",
+        )
+
+
+def test_fallback_to_sample_only_when_scene_detect_fails(tmp_path, mocker) -> None:
+    """On FrameExtractionError from scene-detect, auto strategy retries sample-only."""
+    # First call (scene-detect): mock a failing process
+    failing_proc = _make_mock_proc(returncode=1, stderr="filter error")
+    # Second call (sample-only): mock a successful process
+    success_proc = _make_mock_proc(returncode=0, stderr=SAMPLE_ONLY_LOG)
+
+    popen = mocker.patch(
+        "vidscribe.frames.subprocess.Popen",
+        side_effect=[failing_proc, success_proc],
+    )
+    mocker.patch("vidscribe.frames._probe_duration", return_value=0.0)
+
+    # frames_strategy="auto" → should fall back on first failure
+    extract(
+        tmp_path / "input.mp4",
+        tmp_path / "frames",
+        frames_strategy="auto",
+    )
+
+    assert popen.call_count == 2
+    # First call must include scene-detect filter (command[4]=="-vf", command[5]==filter)
+    first_cmd = popen.call_args_list[0].args[0]
+    vf_idx = first_cmd.index("-vf") + 1
+    assert "gt(scene," in first_cmd[vf_idx]
+    # Second call must NOT include scene-detect filter
+    second_cmd = popen.call_args_list[1].args[0]
+    vf_idx2 = second_cmd.index("-vf") + 1
+    assert "gt(scene," not in second_cmd[vf_idx2]
+    assert "gte(t-prev_selected_t," in second_cmd[vf_idx2]
+
+
+def test_scene_detect_only_strategy_does_not_fallback(tmp_path, mocker) -> None:
+    """frames_strategy='scene-detect' must propagate FrameExtractionError, no fallback."""
+    failing_proc = _make_mock_proc(returncode=1, stderr="scene-detect error")
+    popen = mocker.patch(
+        "vidscribe.frames.subprocess.Popen",
+        return_value=failing_proc,
+    )
+    mocker.patch("vidscribe.frames._probe_duration", return_value=0.0)
+
+    with pytest.raises(FrameExtractionError):
+        extract(
+            tmp_path / "input.mp4",
+            tmp_path / "frames",
+            frames_strategy="scene-detect",
+        )
+
+    # Must only have tried once (no fallback)
+    assert popen.call_count == 1
+
+
+def test_sample_only_strategy_skips_scene_detect(tmp_path, mocker) -> None:
+    """frames_strategy='sample-only' must use simple filter without gt(scene,...)."""
+    success_proc = _make_mock_proc(returncode=0, stderr=SAMPLE_ONLY_LOG)
+    popen = mocker.patch("vidscribe.frames.subprocess.Popen", return_value=success_proc)
+    mocker.patch("vidscribe.frames._probe_duration", return_value=0.0)
+
+    extract(
+        tmp_path / "input.mp4",
+        tmp_path / "frames",
+        frames_strategy="sample-only",
+    )
+
+    assert popen.call_count == 1
+    cmd = popen.call_args.args[0]
+    vf_idx = cmd.index("-vf") + 1
+    assert "gt(scene," not in cmd[vf_idx]
+    assert "gte(t-prev_selected_t," in cmd[vf_idx]
