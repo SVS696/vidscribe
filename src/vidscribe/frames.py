@@ -74,13 +74,23 @@ def _build_sample_only_command(
     output_pattern: Path,
     sample_every: float,
 ) -> list[str]:
-    """Return simpler ffmpeg command using only uniform sampling (no scene-detect)."""
+    """Return simpler ffmpeg command using only uniform sampling (no scene-detect).
+
+    Adds error-tolerant input flags so that corrupt frames are skipped instead
+    of stalling decoding (we hit this on partly-broken meeting recordings).
+    """
     select_filter = (
         f"select='eq(n,0)+gte(t-prev_selected_t,{sample_every})',showinfo"
     )
     return [
         "ffmpeg",
         "-y",
+        # Error-tolerant input options: skip corrupt frames, regenerate PTS,
+        # don't abort on minor decode errors. These have to be BEFORE -i.
+        "-err_detect",
+        "ignore_err",
+        "-fflags",
+        "+discardcorrupt+genpts",
         "-i",
         str(video),
         "-vf",
