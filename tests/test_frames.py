@@ -61,10 +61,11 @@ def test_extract_runs_ffmpeg_with_scene_and_sampling_filter(tmp_path, mocker) ->
 
     command = popen.call_args.args[0]
     assert command[:4] == ["ffmpeg", "-y", "-i", str(video)]
-    assert command[4] == "-vf"
-    assert "gt(scene,0.3)" in command[5]
-    assert "gte(t-prev_selected_t,10.0)" in command[5]
-    assert "metadata=print:key=lavfi.scene_score" in command[5]
+    assert "-an" in command  # audio dropped for frame extraction
+    select_filter = next(arg for arg in command if "select=" in arg)
+    assert "gt(scene,0.3)" in select_filter
+    assert "gte(t-prev_selected_t,10.0)" in select_filter
+    assert "metadata=print:key=lavfi.scene_score" in select_filter
     assert "-progress" in command
     assert "pipe:1" in command
     assert command[-1] == str(tmp_path / "frames" / "frame-%06d.jpg")
