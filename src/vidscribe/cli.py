@@ -18,7 +18,7 @@ from rich.console import Console
 
 from vidscribe import assembler, audio, chunker, frames, provider, speakers, stt
 from vidscribe.cache import Cache
-from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, CorrectionMode, ScreenContextMode, load_config
+from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, CorrectionMode, FramesStrategy, ScreenContextMode, load_config
 from vidscribe.frames import FrameInfo
 from vidscribe.logging_setup import (
     list_log_files,
@@ -223,6 +223,13 @@ def pipeline_command(
         ScreenContextMode | None,
         typer.Option("--screen-context", help="Screen context mode: off, inline, aside, or footer."),
     ] = None,
+    frames_strategy: Annotated[
+        FramesStrategy | None,
+        typer.Option(
+            "--frames-strategy",
+            help="Frame extraction strategy: auto (scene-detect with sample-only fallback), scene-detect, or sample-only.",
+        ),
+    ] = None,
 ) -> None:
     """Run the full transcription and correction pipeline."""
 
@@ -239,6 +246,7 @@ def pipeline_command(
         visual_provider=visual_provider,
         visual_model=visual_model,
         screen_context_mode=screen_context,
+        frames_strategy=frames_strategy,
     )
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
@@ -290,10 +298,17 @@ def extract_command(
         bool,
         typer.Option("--no-cache", help="Bypass cache for this run."),
     ] = False,
+    frames_strategy: Annotated[
+        FramesStrategy | None,
+        typer.Option(
+            "--frames-strategy",
+            help="Frame extraction strategy: auto (scene-detect with sample-only fallback), scene-detect, or sample-only.",
+        ),
+    ] = None,
 ) -> None:
     """Extract audio and keyframes without LLM calls."""
 
-    config = config_from_context(ctx)
+    config = _command_config(ctx, frames_strategy=frames_strategy)
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
     quiet = quiet_from_context(ctx)
@@ -655,6 +670,7 @@ def _frames(
         output_dir,
         sample_every=1 / config.frame_rate,
         pipeline_progress=pipeline_progress,
+        frames_strategy=config.frames_strategy,
     )
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return [_absolute_frame_info(frame) for frame in frame_items]
@@ -781,6 +797,7 @@ def _frames_metadata(config: AppConfig) -> dict[str, Any]:
         "frame_rate": config.frame_rate,
         "sample_every": 1 / config.frame_rate,
         "scene_threshold": 0.3,
+        "frames_strategy": config.frames_strategy,
     }
 
 

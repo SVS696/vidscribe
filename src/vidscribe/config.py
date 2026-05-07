@@ -16,6 +16,7 @@ ChunkStrategy = Literal["speaker", "time", "scene"]
 ProviderName = Literal["claude", "codex", "ollama"]
 CorrectionMode = Literal["single", "mix"]
 ScreenContextMode = Literal["off", "inline", "aside", "footer"]
+FramesStrategy = Literal["auto", "scene-detect", "sample-only"]
 CacheStage = Literal[
     "audio",
     "frames",
@@ -50,6 +51,7 @@ class AppConfig(BaseModel):
     visual_provider: ProviderName = "claude"
     visual_model: str = "sonnet"
     screen_context_mode: ScreenContextMode = "off"
+    frames_strategy: FramesStrategy = "auto"
 
     @field_validator("provider", "text_provider", "visual_provider", mode="before")
     @classmethod
