@@ -16,7 +16,7 @@ ChunkStrategy = Literal["speaker", "time", "scene"]
 ProviderName = Literal["claude", "codex", "ollama"]
 CorrectionMode = Literal["single", "mix"]
 ScreenContextMode = Literal["off", "inline", "aside", "footer"]
-FramesStrategy = Literal["auto", "scene-detect", "sample-only"]
+FramesStrategy = Literal["auto", "scene-detect", "sample-only", "seek"]
 CacheStage = Literal[
     "audio",
     "frames",
