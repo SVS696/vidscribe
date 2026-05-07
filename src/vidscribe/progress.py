@@ -28,6 +28,13 @@ if TYPE_CHECKING:
 
 _STDERR_CONSOLE = Console(stderr=True)
 
+
+def _fmt_elapsed(seconds: float) -> str:
+    """Format elapsed seconds as M:SS or MM:SS."""
+    total = max(0, int(seconds))
+    mm, ss = divmod(total, 60)
+    return f"{mm}:{ss:02d}"
+
 _STAGE_LABELS = {
     "audio": "[1/9] Extracting audio",
     "stt": "[2/9] Transcribing",
@@ -75,12 +82,14 @@ class PipelineProgress:
 
         self._progress: Progress | None = None
         self._stage_tasks: dict[str, TaskID] = {}
+        self._t0: float = 0.0
 
     # ------------------------------------------------------------------
     # Context manager protocol
     # ------------------------------------------------------------------
 
     def __enter__(self) -> "PipelineProgress":
+        self._t0 = time.monotonic()
         if not self._quiet:
             self._progress = Progress(
                 SpinnerColumn(),
@@ -150,6 +159,10 @@ class PipelineProgress:
                 description=f"{label} [dim]({elapsed:.1f}s)[/dim]",
             )
 
+    def elapsed_str(self) -> str:
+        """Return pipeline-total elapsed time as M:SS string."""
+        return _fmt_elapsed(time.monotonic() - self._t0)
+
     def log(self, message: str) -> None:
         """Write a timestamped log line that stays above the progress bars.
 
@@ -157,7 +170,12 @@ class PipelineProgress:
         when one is configured), even when *quiet* is True.  This ensures that
         long-running stages produce live output in ``vidscribe logs --follow``
         regardless of the terminal quiet flag.
+
+        If *message* contains the word "done" the current pipeline elapsed
+        time is automatically appended as ``| elapsed M:SS``.
         """
+        if "done" in message.lower() and self._t0:
+            message = f"{message} | elapsed {self.elapsed_str()}"
         if self._progress is not None:
             self._progress.console.log(message)
         else:
