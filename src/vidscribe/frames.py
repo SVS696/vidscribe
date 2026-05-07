@@ -162,6 +162,20 @@ def extract(
     output_dir = Path(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Clean stale jpgs from a previous (possibly interrupted) run so that
+    # the running counter ("N frames so far") reflects the current attempt.
+    for stale in output_dir.glob("frame-*.jpg"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    stale_json = output_dir / "frames.json"
+    if stale_json.exists():
+        try:
+            stale_json.unlink()
+        except OSError:
+            pass
+
     output_pattern = output_dir / "frame-%06d.jpg"
 
     ctx = pipeline_progress.stage("frames") if pipeline_progress is not None else _null_stage()
