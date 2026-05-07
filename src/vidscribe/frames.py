@@ -72,10 +72,21 @@ def extract(
 
     ctx = pipeline_progress.stage("frames") if pipeline_progress is not None else _null_stage()
 
+    total_seconds = _probe_duration(video)
+
     if pipeline_progress is not None:
-        pipeline_progress.log(
-            f"[5/9] Frames extraction: scene-detect {scene_threshold}, sample every {sample_every:.0f}s"
-        )
+        if total_seconds > 0:
+            tm, ts = divmod(int(total_seconds), 60)
+            th, tm = divmod(tm, 60)
+            duration_str = f"{th}:{tm:02d}:{ts:02d}" if th else f"{tm}:{ts:02d}"
+            pipeline_progress.log(
+                f"[5/9] Frames extraction: video {duration_str},"
+                f" scene-detect {scene_threshold}, sample every {sample_every:.0f}s"
+            )
+        else:
+            pipeline_progress.log(
+                f"[5/9] Frames extraction: scene-detect {scene_threshold}, sample every {sample_every:.0f}s"
+            )
     t0 = _time.monotonic()
 
     try:
@@ -95,6 +106,7 @@ def extract(
     with ctx:
         _read_frames_progress(
             proc,
+            total_seconds=total_seconds,
             pipeline_progress=pipeline_progress,
             output_dir=output_dir,
             stdout_lines=stdout_lines,
@@ -132,6 +144,7 @@ def extract(
 def _read_frames_progress(
     proc: "subprocess.Popen[str]",
     *,
+    total_seconds: float,
     pipeline_progress: "PipelineProgress | None",
     output_dir: Path,
     stdout_lines: list[str],
@@ -159,13 +172,49 @@ def _read_frames_progress(
             if now - _last_log >= _log_interval:
                 _last_log = now
                 audio_s = out_time_us / 1_000_000
-                mm = int(audio_s // 60)
-                ss = int(audio_s % 60)
+                mm, ss = divmod(int(audio_s), 60)
+                hh, mm = divmod(mm, 60)
+                proc_str = f"{hh}:{mm:02d}:{ss:02d}" if hh else f"{mm}:{ss:02d}"
                 # Count extracted frames so far
                 n_so_far = len(list(output_dir.glob("frame-*.jpg")))
-                pipeline_progress.log(
-                    f"[5/9] Frames: {mm}:{ss:02d} processed | {n_so_far} frames so far"
-                )
+                if total_seconds > 0:
+                    pct = min(100.0, audio_s / total_seconds * 100.0)
+                    tm, ts = divmod(int(total_seconds), 60)
+                    th, tm = divmod(tm, 60)
+                    total_str = f"{th}:{tm:02d}:{ts:02d}" if th else f"{tm}:{ts:02d}"
+                    pipeline_progress.log(
+                        f"[5/9] Frames: {proc_str}/{total_str} ({pct:.0f}%) | {n_so_far} frames so far"
+                    )
+                else:
+                    pipeline_progress.log(
+                        f"[5/9] Frames: {proc_str} processed | {n_so_far} frames so far"
+                    )
+
+
+def _probe_duration(video: Path) -> float:
+    """Return video duration in seconds via ffprobe, or 0.0 on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(video),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return float(result.stdout.strip() or 0.0)
+    except (FileNotFoundError, ValueError, subprocess.TimeoutExpired):
+        pass
+    return 0.0
 
 
 @contextmanager
