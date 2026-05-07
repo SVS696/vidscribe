@@ -150,6 +150,19 @@ class PipelineProgress:
                 description=f"{label} [dim]({elapsed:.1f}s)[/dim]",
             )
 
+    def log(self, message: str) -> None:
+        """Write a timestamped log line that stays above the progress bars.
+
+        Always writes to the backing console (and therefore to the log file
+        when one is configured), even when *quiet* is True.  This ensures that
+        long-running stages produce live output in ``vidscribe logs --follow``
+        regardless of the terminal quiet flag.
+        """
+        if self._progress is not None:
+            self._progress.console.log(message)
+        else:
+            self._console.log(message)
+
     def print(self, message: str) -> None:
         """Print a message that stays above the progress bars."""
         if self._quiet:

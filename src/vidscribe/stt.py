@@ -268,19 +268,11 @@ def diarize(
     pipeline_class = _pyannote_pipeline_class()
     call_kwargs: dict[str, Any] = {}
 
-    # Try to attach a pyannote ProgressHook if the caller didn't supply one
-    # and pipeline_progress is available.
-    _hook_to_use = progress_hook
-    if _hook_to_use is None and pipeline_progress is not None:
-        try:
-            from pyannote.audio.pipelines.utils.hook import ProgressHook
-
-            _hook_to_use = ProgressHook()
-        except Exception:
-            pass
-
-    if _hook_to_use is not None:
-        call_kwargs["hook"] = _hook_to_use
+    # pyannote 4.x ProgressHook requires `with ProgressHook() as hook`
+    # context manager; we surface our own diarization stage instead. Pass
+    # progress_hook explicitly only if the caller supplied one already entered.
+    if progress_hook is not None:
+        call_kwargs["hook"] = progress_hook
 
     waveform = _load_waveform(audio_path)
 
