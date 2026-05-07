@@ -310,6 +310,93 @@ Run `vidscribe pipeline VIDEO` or at least `vidscribe transcribe VIDEO` and
 `vidscribe extract VIDEO` first. The correction command intentionally works from
 cached STT and frame artifacts.
 
+## Pipeline flow (9 этапов)
+
+```
+[1/9] Audio extraction      ffmpeg → 16kHz mono WAV
+[2/9] Frames extraction     scene-detect + sampling, with 3-level fallback (см. ниже)
+[3/9] STT                   faster-whisper (по умолчанию ct2-модель из noScribe.app)
+[4/9] Diarization           pyannote.audio (локальная или fallback на HF)
+[5/9] Merge ASR+diar        слова получают speaker label по максимальному overlap
+[6/9] Chunking              speaker / time / scene стратегия
+[7/9] Speaker identification    LLM-call (provider) → s00→Иван, s01→Анна, или fallback
+[8/9] Correction loop       single (один pass) или mix (text→visual)
+[9/9] Final assembly        markdown с timestamps, screen-context, speaker map
+```
+
+### Frame extraction fallback (для битых видео)
+
+Запись из Zoom/Telemost иногда содержит битые кадры — ffmpeg застревает на
+конкретном таймштампе. Vidscribe имеет 3-уровневый fallback с watchdog'ом
+(120s таймаут на застой `out_time_us`):
+
+```
+[2/9] scene-detect + sampling
+       │
+       │ застрял? watchdog kill после 120s
+       ▼
+[2/9] sample-only (no scene-detect)
+       флаги: -err_detect ignore_err -fflags +discardcorrupt+genpts
+              -skip_frame nokey -an
+       │
+       │ застрял? watchdog kill после 120s
+       ▼
+[2/9] seek-based per-frame
+       один ffmpeg -ss T -frames:v 1 на каждый таймштамп
+       per-call timeout 15s, битые сегменты пропускаются индивидуально
+       — самый надёжный вариант, но медленнее
+```
+
+`--frames-strategy seek` сразу пропускает первые два уровня (~4 минуты ожидания).
+
+## CLI flags reference
+
+Глобальные опции (передаются ДО subcommand):
+
+| Флаг | Default | Описание |
+|------|---------|----------|
+| `--provider` | (config) | CLI провайдер: `claude`, `codex`, `ollama` (для single-mode) |
+| `--model` | (config) | Имя модели провайдера |
+| `--whisper-model` | `noscribe-precise` | `noscribe-precise` / `noscribe-fast` (из noScribe.app) или `large-v3` / `medium` (HF) |
+| `--chunk-strategy` | `speaker` | `speaker` (по сменам говорящего) / `time` (фикс. окно) / `scene` (по кадрам) |
+| `--frame-rate` | `0.1` | Частота сэмплирования кадров (FPS). 0.1 = 1 кадр / 10 сек |
+| `--language` | `ru` | Язык транскрипции |
+| `--hf-token` | env `HF_TOKEN` | HuggingFace токен для fallback на pyannote из HF |
+| `--cache-dir` | `~/Library/Caches/vidscribe` (macOS) | Корень кэша артефактов (по умолчанию global per-user) |
+| `--no-cache STAGE` | — | Пропустить кэш на стадии: `audio`, `frames`, `asr`, `diar`, `stt`, `chunks`, `speakers`, `corrected`, `final`. Можно повторять. |
+| `--speakers "A,B"` | — | Имена говорящих позиционно (s00=A, s01=B). Override для speaker-id |
+| `--quiet` | off | Выключить прогресс на stderr (для CI/скриптов) |
+| `--no-log` | off | Не создавать файл лога |
+| `--log-file PATH` | auto | Переопределить путь лог-файла |
+
+### `vidscribe pipeline VIDEO` — full processing
+
+| Флаг | Default | Описание |
+|------|---------|----------|
+| `--out FILE` | — | Путь к финальному markdown |
+| `--no-cache` | — | Не использовать кэш для всех стадий этого запуска |
+| `--correction-mode` | `single` | `single` (один pass) или `mix` (codex текст → claude визуал) |
+| `--text-provider` | `--provider` | Провайдер для Pass 1 (mix-mode, текст без кадров) |
+| `--text-model` | `--model` | Модель для Pass 1 |
+| `--visual-provider` | `claude` | Провайдер для Pass 2 (mix-mode, кадры через Read tool) |
+| `--visual-model` | `sonnet` | Модель для Pass 2 |
+| `--screen-context` | `off` | `off` / `inline` (`> 📺 [HH:MM:SS] desc` перед репликой) / `aside` (раздел «Сцены» в начале) / `footer` |
+| `--frames-strategy` | `auto` | `auto` (3-level fallback) / `scene-detect` / `sample-only` / `seek` |
+
+### Subcommands
+
+| Команда | Когда использовать |
+|---------|---------------------|
+| `pipeline VIDEO` | Первый запуск — full processing |
+| `correct VIDEO` | Перепрогон только correction loop (использует кэш audio/STT/frames) |
+| `transcribe VIDEO` | Только STT + diarization, без LLM-correction |
+| `extract VIDEO` | Только audio + keyframes |
+| `cache list [VIDEO]` | Что в кэше |
+| `cache clear [VIDEO]` | Очистить кэш |
+| `logs` | Путь к latest.log |
+| `logs --follow` | `tail -f` последнего лога (live-эфир в другом окне) |
+| `logs --list` | Последние 10 запусков |
+
 ## Architecture
 
 See `docs/architecture.md` for the pipeline diagram and artifact layout.
