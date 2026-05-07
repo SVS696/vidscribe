@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -19,6 +20,11 @@ from vidscribe import assembler, audio, chunker, frames, provider, speakers, stt
 from vidscribe.cache import Cache
 from vidscribe.config import AppConfig, CacheStage, ChunkStrategy, CorrectionMode, ScreenContextMode, load_config
 from vidscribe.frames import FrameInfo
+from vidscribe.logging_setup import (
+    list_log_files,
+    latest_log_path,
+    make_log_path,
+)
 from vidscribe.pipeline import correct_chunks
 from vidscribe.progress import PipelineProgress
 from vidscribe.stt import SttResult
@@ -98,6 +104,14 @@ def main(
         bool,
         typer.Option("--quiet", help="Suppress progress output (for CI/scripts)."),
     ] = False,
+    no_log: Annotated[
+        bool,
+        typer.Option("--no-log", help="Disable automatic log file creation."),
+    ] = False,
+    log_file: Annotated[
+        Path | None,
+        typer.Option("--log-file", help="Override log file path."),
+    ] = None,
 ) -> None:
     """Run vidscribe commands."""
 
@@ -119,7 +133,7 @@ def main(
     except ValidationError as exc:
         raise typer.BadParameter(_validation_message(exc)) from exc
 
-    ctx.obj = {"config": config, "quiet": quiet}
+    ctx.obj = {"config": config, "quiet": quiet, "no_log": no_log, "log_file": log_file}
 
 
 def config_from_context(ctx: typer.Context) -> AppConfig:
@@ -132,6 +146,33 @@ def quiet_from_context(ctx: typer.Context) -> bool:
     """Return the --quiet flag from the root callback."""
 
     return bool(ctx.obj.get("quiet", False))
+
+
+def log_file_from_context(ctx: typer.Context, command_name: str) -> Path | None:
+    """Resolve the effective log file path for a command invocation.
+
+    Returns ``None`` when ``--no-log`` is set or ctx.obj is not yet populated
+    (e.g. during ``--help``).
+    """
+    obj = ctx.obj
+    if not isinstance(obj, dict):
+        return None
+    if obj.get("no_log"):
+        return None
+    override: Path | None = obj.get("log_file")
+    if override is not None:
+        return override
+    # Derive log root from cache_dir parent so logs sit next to cache
+    config: AppConfig | None = obj.get("config")
+    log_root: Path | None = None
+    if config is not None:
+        # cache_dir is e.g. `Path(".vidscribe")` or an absolute path;
+        # logs go in cache_dir.parent / ".vidscribe" / "logs" only when
+        # cache_dir is the default `.vidscribe`; otherwise use cwd.
+        if config.cache_dir.name == ".vidscribe":
+            log_root = config.cache_dir.parent
+        # else: leave log_root=None → make_log_path uses cwd
+    return make_log_path(command_name, root=log_root)
 
 
 @app.command("pipeline")
@@ -210,7 +251,8 @@ def pipeline_command(
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
     quiet = quiet_from_context(ctx)
-    with PipelineProgress(quiet=quiet) as pp:
+    log_path = log_file_from_context(ctx, "pipeline")
+    with PipelineProgress(quiet=quiet, log_file=log_path) as pp:
         audio_path, frame_items = _extract(video, config, cache, video_key, pipeline_progress=pp)
         stt_result = _transcribe_audio(audio_path, config, cache, video_key, pipeline_progress=pp)
         chunk_items = _chunks(stt_result, frame_items, config, cache, video_key, pipeline_progress=pp)
@@ -258,7 +300,8 @@ def extract_command(
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
     quiet = quiet_from_context(ctx)
-    with PipelineProgress(quiet=quiet) as pp:
+    log_path = log_file_from_context(ctx, "extract")
+    with PipelineProgress(quiet=quiet, log_file=log_path) as pp:
         audio_path, frame_items = _extract(video, config, cache, video_key, pipeline_progress=pp)
     console.print(f"audio: {audio_path}")
     console.print(f"frames: {len(frame_items)}")
@@ -283,7 +326,8 @@ def transcribe_command(
     cache = _cache(config, no_cache=no_cache)
     video_key = cache.key_for("video", video=video)
     quiet = quiet_from_context(ctx)
-    with PipelineProgress(quiet=quiet) as pp:
+    log_path = log_file_from_context(ctx, "transcribe")
+    with PipelineProgress(quiet=quiet, log_file=log_path) as pp:
         audio_path = _audio(video, cache, video_key, pipeline_progress=pp)
         stt_result = _transcribe_audio(audio_path, config, cache, video_key, pipeline_progress=pp)
     console.print(f"segments: {len(stt_result.segments)}")
@@ -353,7 +397,8 @@ def correct_command(
     stt_result = _cached_model(cache, "stt", video_key, SttResult)
     frame_items = _cached_frames(cache, video_key)
     quiet = quiet_from_context(ctx)
-    with PipelineProgress(quiet=quiet) as pp:
+    log_path = log_file_from_context(ctx, "correct")
+    with PipelineProgress(quiet=quiet, log_file=log_path) as pp:
         chunk_items = _chunks(stt_result, frame_items, config, cache, video_key, pipeline_progress=pp)
         cli_provider = _make_provider(config)
         speaker_map = speakers.identify(
@@ -429,6 +474,78 @@ def cache_clear(
     if target.exists():
         shutil.rmtree(target)
     console.print(str(target))
+
+
+@app.command("logs")
+def logs_command(
+    follow: Annotated[
+        bool,
+        typer.Option("--follow", "-f", help="tail -f the latest log file."),
+    ] = False,
+    list_logs: Annotated[
+        bool,
+        typer.Option("--list", "-l", help="List last 10 log files."),
+    ] = False,
+    path: Annotated[
+        bool,
+        typer.Option("--path", help="Print absolute path to latest.log (default)."),
+    ] = False,
+) -> None:
+    """Show, list, or follow vidscribe run logs.
+
+    By default prints the path to the latest log file.
+
+    Examples:
+
+        vidscribe logs                  # path to latest.log
+
+        vidscribe logs --follow         # tail -f latest.log (Ctrl+C to stop)
+
+        vidscribe logs --list           # last 10 runs
+    """
+
+    log_path = latest_log_path()
+
+    if list_logs:
+        files = list_log_files(limit=10)
+        if not files:
+            console.print("No log files found in .vidscribe/logs/")
+            return
+        for f in files:
+            # Extract timestamp and command from filename e.g.
+            # 2026-05-07T03-12-45-pipeline.log → 2026-05-07 03:12:45  pipeline
+            stem = f.stem  # e.g. "2026-05-07T03-12-45-pipeline"
+            parts = stem.split("-", maxsplit=6)
+            # parts: ['2026', '05', '07T03', '12', '45', 'pipeline']
+            try:
+                ts_raw = "-".join(parts[:5])  # "2026-05-07T03-12-45" approx
+                ts_display = ts_raw.replace("T", " ").replace("-", ":", 2)
+                # Actually reconstruct: date=parts[0]-parts[1]-parts[2 split on T]
+                date_part, time_prefix = parts[2].split("T")
+                ts_display = f"{parts[0]}-{parts[1]}-{date_part} {time_prefix}:{parts[3]}:{parts[4]}"
+                cmd_part = parts[5] if len(parts) > 5 else "?"
+            except (IndexError, ValueError):
+                ts_display = stem
+                cmd_part = ""
+            console.print(f"{ts_display}  {cmd_part:<12}  {f}")
+        return
+
+    if follow:
+        if log_path is None:
+            console.print("No log files found in .vidscribe/logs/", err=True)
+            raise typer.Exit(1)
+        console.print(f"Following: {log_path}", err=True)
+        try:
+            subprocess.run(["tail", "-f", str(log_path)], check=False)
+        except KeyboardInterrupt:
+            pass
+        return
+
+    # Default / --path: print path
+    if log_path is None:
+        console.print("No log files found in .vidscribe/logs/")
+        raise typer.Exit(1)
+    console.print(str(log_path))
 
 
 def _parse_speakers(value: str) -> tuple[str, ...]:

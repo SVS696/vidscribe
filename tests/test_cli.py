@@ -736,6 +736,127 @@ def test_correct_screen_context_flag_is_passed_to_assembler(tmp_path, mocker) ->
     assert call_kwargs.get("screen_context_mode") == "aside"
 
 
+def test_logs_command_path_prints_latest(tmp_path, monkeypatch) -> None:
+    """vidscribe logs prints path to latest.log when it exists."""
+    monkeypatch.chdir(tmp_path)
+    logs_dir = tmp_path / ".vidscribe" / "logs"
+    logs_dir.mkdir(parents=True)
+    real = logs_dir / "2026-05-07T00-00-01-pipeline.log"
+    real.write_text("content", encoding="utf-8")
+    (logs_dir / "latest.log").symlink_to(real.name)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["logs"])
+
+    assert result.exit_code == 0, result.output
+    assert "pipeline" in result.output
+
+
+def test_logs_command_path_exits_nonzero_when_no_logs(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["logs"])
+    assert result.exit_code != 0
+
+
+def test_logs_command_list_shows_recent_runs(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    logs_dir = tmp_path / ".vidscribe" / "logs"
+    logs_dir.mkdir(parents=True)
+    for cmd in ["pipeline", "correct", "extract"]:
+        (logs_dir / f"2026-05-07T00-00-01-{cmd}.log").write_text("x", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["logs", "--list"])
+
+    assert result.exit_code == 0, result.output
+    assert "pipeline" in result.output
+    assert "correct" in result.output
+    assert "extract" in result.output
+
+
+def test_logs_command_list_empty(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["logs", "--list"])
+    assert result.exit_code == 0
+    assert "No log files" in result.output
+
+
+def test_pipeline_creates_log_file(tmp_path, mocker) -> None:
+    """Running pipeline should create a .vidscribe/logs/*.log file."""
+    runner = CliRunner()
+    video = video_file(tmp_path)
+    out = tmp_path / "out.md"
+
+    mocker.patch(
+        "vidscribe.cli._extract",
+        return_value=(tmp_path / "audio.wav", []),
+    )
+    mocker.patch("vidscribe.cli._transcribe_audio", return_value=stt_result())
+    mocker.patch("vidscribe.cli._chunks", return_value=[chunk_item()])
+    mocker.patch("vidscribe.cli.provider.make", return_value=object())
+    mocker.patch(
+        "vidscribe.cli.speakers.identify",
+        return_value={"SPEAKER_00": "Alice"},
+    )
+    mocker.patch("vidscribe.cli.correct_chunks", return_value=[corrected_item()])
+    mocker.patch("vidscribe.cli.assembler.assemble", return_value="final")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "pipeline",
+            str(video),
+            "--out",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    logs_dir = tmp_path / ".vidscribe" / "logs"
+    log_files = list(logs_dir.glob("*-pipeline.log"))
+    assert log_files, "Expected a pipeline log file to be created"
+    assert (logs_dir / "latest.log").is_symlink()
+
+
+def test_pipeline_no_log_suppresses_log_file(tmp_path, mocker) -> None:
+    """--no-log should prevent any log file creation."""
+    runner = CliRunner()
+    video = video_file(tmp_path)
+
+    mocker.patch(
+        "vidscribe.cli._extract",
+        return_value=(tmp_path / "audio.wav", []),
+    )
+    mocker.patch("vidscribe.cli._transcribe_audio", return_value=stt_result())
+    mocker.patch("vidscribe.cli._chunks", return_value=[chunk_item()])
+    mocker.patch("vidscribe.cli.provider.make", return_value=object())
+    mocker.patch(
+        "vidscribe.cli.speakers.identify",
+        return_value={"SPEAKER_00": "Alice"},
+    )
+    mocker.patch("vidscribe.cli.correct_chunks", return_value=[corrected_item()])
+    mocker.patch("vidscribe.cli.assembler.assemble", return_value="final")
+
+    result = runner.invoke(
+        app,
+        [
+            "--cache-dir",
+            str(tmp_path / ".vidscribe"),
+            "--no-log",
+            "pipeline",
+            str(video),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    logs_dir = tmp_path / ".vidscribe" / "logs"
+    assert not logs_dir.exists() or not list(logs_dir.glob("*-pipeline.log"))
+
+
 def test_cache_list_and_clear_for_video(tmp_path) -> None:
     runner = CliRunner()
     video = video_file(tmp_path)
