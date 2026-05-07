@@ -136,7 +136,7 @@ def _seek_extract_frames(
     """
     if pipeline_progress is not None:
         pipeline_progress.log(
-            "[5/9] Frames: switching to seek-based extraction (one ffmpeg per frame)"
+            "[2/9] Frames: switching to seek-based extraction (one ffmpeg per frame)"
         )
 
     if total_seconds <= 0:
@@ -198,13 +198,13 @@ def _seek_extract_frames(
                 ts_str = f"{hh}:{mm:02d}:{ss:02d}" if hh else f"{mm}:{ss:02d}"
                 pct = ts / total_seconds * 100 if total_seconds > 0 else 0
                 pipeline_progress.log(
-                    f"[5/9] Frames (seek): {ts_str} processed ({pct:.0f}%)"
+                    f"[2/9] Frames (seek): {ts_str} processed ({pct:.0f}%)"
                     f" | {len(frames)} ok | {n_failed} skipped"
                 )
 
     if pipeline_progress is not None:
         pipeline_progress.log(
-            f"[5/9] Frames (seek): {len(frames)} extracted, {n_failed} skipped (corrupt segments)"
+            f"[2/9] Frames (seek): {len(frames)} extracted, {n_failed} skipped (corrupt segments)"
         )
 
     # If seek-based extraction also produced nothing (all frames failed), the
@@ -309,12 +309,12 @@ def extract(
             th, tm = divmod(tm, 60)
             duration_str = f"{th}:{tm:02d}:{ts:02d}" if th else f"{tm}:{ts:02d}"
             pipeline_progress.log(
-                f"[5/9] Frames extraction: video {duration_str},"
+                f"[2/9] Frames extraction: video {duration_str},"
                 f" scene-detect {scene_threshold}, sample every {sample_every:.0f}s"
             )
         else:
             pipeline_progress.log(
-                f"[5/9] Frames extraction: scene-detect {scene_threshold}, sample every {sample_every:.0f}s"
+                f"[2/9] Frames extraction: scene-detect {scene_threshold}, sample every {sample_every:.0f}s"
             )
     t0 = _time.monotonic()
 
@@ -352,7 +352,7 @@ def extract(
                 # scene-detect failed or timed out — retry with sample-only
                 if pipeline_progress is not None:
                     pipeline_progress.log(
-                        "[5/9] Frames: scene-detect failed/timed-out, retrying with sample-only strategy"
+                        "[2/9] Frames: scene-detect failed/timed-out, retrying with sample-only strategy"
                     )
                 # Clean up any partially extracted frames before retry
                 for partial in output_dir.glob("frame-*.jpg"):
@@ -377,7 +377,7 @@ def extract(
                         raise sample_error
                     if pipeline_progress is not None:
                         pipeline_progress.log(
-                            "[5/9] Frames: sample-only stalled too, switching to seek-based per-frame extraction"
+                            "[2/9] Frames: sample-only stalled too, switching to seek-based per-frame extraction"
                         )
                     for partial in output_dir.glob("frame-*.jpg"):
                         try:
@@ -413,19 +413,19 @@ def extract(
         elapsed = _time.monotonic() - t0
         if seek_used:
             pipeline_progress.log(
-                f"[5/9] Frames done in {elapsed:.1f}s"
+                f"[2/9] Frames done in {elapsed:.1f}s"
                 f" | {len(frames)} frames (seek-based per-frame fallback)"
             )
         elif fallback_used:
             pipeline_progress.log(
-                f"[5/9] Frames done in {elapsed:.1f}s"
+                f"[2/9] Frames done in {elapsed:.1f}s"
                 f" | {len(frames)} frames (sample-only fallback)"
             )
         else:
             n_scene = sum(1 for f in frames if f.scene_change)
             n_sampled = len(frames) - n_scene
             pipeline_progress.log(
-                f"[5/9] Frames done in {elapsed:.1f}s"
+                f"[2/9] Frames done in {elapsed:.1f}s"
                 f" | {len(frames)} frames extracted"
                 f" ({n_scene} scene-changes + {n_sampled} sampled)"
             )
@@ -472,7 +472,7 @@ def _read_frames_progress(
             stuck_at = f"{hh}:{mm:02d}:{ss:02d}" if hh else f"{mm}:{ss:02d}"
             if pipeline_progress is not None:
                 pipeline_progress.log(
-                    f"[5/9] FFmpeg stuck at {stuck_at} for {stuck_timeout:.0f}s — killing subprocess"
+                    f"[2/9] FFmpeg stuck at {stuck_at} for {stuck_timeout:.0f}s — killing subprocess"
                 )
             try:
                 proc.kill()
@@ -526,11 +526,11 @@ def _read_frames_progress(
                     th, tm = divmod(tm, 60)
                     total_str = f"{th}:{tm:02d}:{ts:02d}" if th else f"{tm}:{ts:02d}"
                     pipeline_progress.log(
-                        f"[5/9] Frames: {proc_str}/{total_str} ({pct:.0f}%) | {n_so_far} frames so far"
+                        f"[2/9] Frames: {proc_str}/{total_str} ({pct:.0f}%) | {n_so_far} frames so far"
                     )
                 else:
                     pipeline_progress.log(
-                        f"[5/9] Frames: {proc_str} processed | {n_so_far} frames so far"
+                        f"[2/9] Frames: {proc_str} processed | {n_so_far} frames so far"
                     )
 
     # Drain any remaining data after process exited

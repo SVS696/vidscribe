@@ -712,7 +712,7 @@ def _transcribe_audio(
 
     if pipeline_progress is not None:
         pipeline_progress.log(
-            f"[4/9] Merging ASR + diarization | {len(asr.segments)} segments"
+            f"[5/9] Merging ASR + diarization | {len(asr.segments)} segments"
         )
     t0_merge = _time.monotonic()
     merge_ctx = (
@@ -726,7 +726,7 @@ def _transcribe_audio(
         elapsed_merge = _time.monotonic() - t0_merge
         n_turns = len({seg.speaker for seg in result.segments if seg.speaker})
         pipeline_progress.log(
-            f"[4/9] Merge done in {elapsed_merge:.2f}s | {len(result.segments)} segments, {n_turns} speaker turns"
+            f"[5/9] Merge done in {elapsed_merge:.2f}s | {len(result.segments)} segments, {n_turns} speaker turns"
         )
     cache.set("asr", video_key, asr)
     cache.set("diar", video_key, diar)

@@ -37,10 +37,10 @@ def _fmt_elapsed(seconds: float) -> str:
 
 _STAGE_LABELS = {
     "audio": "[1/9] Extracting audio",
-    "stt": "[2/9] Transcribing",
-    "diar": "[3/9] Diarizing",
-    "merge": "[4/9] Merging ASR + diarization",
-    "frames": "[5/9] Extracting frames",
+    "stt": "[3/9] Transcribing",
+    "diar": "[4/9] Diarizing",
+    "merge": "[5/9] Merging ASR + diarization",
+    "frames": "[2/9] Extracting frames",
     "chunks": "[6/9] Chunking",
     "speakers": "[7/9] Identifying speakers",
     "correct": "[8/9] Correcting chunks",

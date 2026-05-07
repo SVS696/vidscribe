@@ -195,7 +195,7 @@ def transcribe(
 
     if pipeline_progress is not None:
         pipeline_progress.log(
-            f"[2/9] Loading whisper from {model_path}"
+            f"[3/9] Loading whisper from {model_path}"
         )
 
     t0_load = _time.monotonic()
@@ -209,11 +209,11 @@ def transcribe(
     if pipeline_progress is not None:
         load_elapsed = _time.monotonic() - t0_load
         pipeline_progress.log(
-            f"[2/9] Whisper loaded in {load_elapsed:.1f}s"
+            f"[3/9] Whisper loaded in {load_elapsed:.1f}s"
             f" | model={effective_model}, device={resolved_device}, compute_type={compute_type}"
         )
         pipeline_progress.log(
-            f"[2/9] STT: language={language}"
+            f"[3/9] STT: language={language}"
         )
 
     segments_iter, info = whisper_model.transcribe(
@@ -267,17 +267,17 @@ def transcribe(
                     cur_mm = int(end_s // 60)
                     cur_ss = int(end_s % 60)
                     pipeline_progress.log(
-                        f"[2/9] STT segment {cur_mm}:{cur_ss:02d}/{total_mm}:{total_ss:02d}"
+                        f"[3/9] STT segment {cur_mm}:{cur_ss:02d}/{total_mm}:{total_ss:02d}"
                         f" ({pct}%)"
                     )
                 else:
-                    pipeline_progress.log(f"[2/9] STT segment at {end_s:.0f}s")
+                    pipeline_progress.log(f"[3/9] STT segment at {end_s:.0f}s")
 
     if pipeline_progress is not None:
         elapsed = _time.monotonic() - t0_stt
         mm, ss = divmod(int(elapsed), 60)
         pipeline_progress.log(
-            f"[2/9] STT done in {mm}:{ss:02d}, {len(segments)} segments, "
+            f"[3/9] STT done in {mm}:{ss:02d}, {len(segments)} segments, "
             f"{sum(len(seg.words) for seg in segments)} words"
         )
 
@@ -327,17 +327,17 @@ def diarize(
     if pipeline_progress is not None:
         if assets is not None:
             pipeline_progress.log(
-                f"[3/9] Loading pyannote pipeline from {assets.config_yaml}"
+                f"[4/9] Loading pyannote pipeline from {assets.config_yaml}"
             )
             pipeline_progress.log(
-                f"[3/9]   segmentation: {assets.segmentation_path}"
+                f"[4/9]   segmentation: {assets.segmentation_path}"
             )
             pipeline_progress.log(
-                f"[3/9]   embedding:    {assets.embedding_path}"
+                f"[4/9]   embedding:    {assets.embedding_path}"
             )
         else:
             pipeline_progress.log(
-                "[3/9] Loading pyannote pipeline: pyannote/speaker-diarization-3.1"
+                "[4/9] Loading pyannote pipeline: pyannote/speaker-diarization-3.1"
             )
 
     t0_diar = _time.monotonic()
@@ -355,9 +355,9 @@ def diarize(
                 pipeline = pipeline_class.from_pretrained(str(config_path))
                 if pipeline_progress is not None:
                     pipeline_progress.log(
-                        f"[3/9] Pipeline loaded in {_time.monotonic() - t0_load_diar:.1f}s"
+                        f"[4/9] Pipeline loaded in {_time.monotonic() - t0_load_diar:.1f}s"
                     )
-                    pipeline_progress.log("[3/9] Diarization running...")
+                    pipeline_progress.log("[4/9] Diarization running...")
                 annotation = pipeline(waveform, **call_kwargs)
         else:
             t0_load_diar = _time.monotonic()
@@ -367,9 +367,9 @@ def diarize(
             )
             if pipeline_progress is not None:
                 pipeline_progress.log(
-                    f"[3/9] Pipeline loaded in {_time.monotonic() - t0_load_diar:.1f}s"
+                    f"[4/9] Pipeline loaded in {_time.monotonic() - t0_load_diar:.1f}s"
                 )
-                pipeline_progress.log("[3/9] Diarization running...")
+                pipeline_progress.log("[4/9] Diarization running...")
             annotation = pipeline(waveform, **call_kwargs)
 
     result = DiarResult(turns=_turns_from_annotation(annotation))
@@ -379,7 +379,7 @@ def diarize(
         mm, ss = divmod(int(elapsed), 60)
         speakers_found = sorted({turn.speaker for turn in result.turns})
         pipeline_progress.log(
-            f"[3/9] Diarization done in {mm}:{ss:02d}, "
+            f"[4/9] Diarization done in {mm}:{ss:02d}, "
             f"{len(speakers_found)} speaker(s) detected"
             + (f" ({', '.join(speakers_found)})" if speakers_found else "")
         )
