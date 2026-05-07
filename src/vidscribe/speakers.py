@@ -67,8 +67,13 @@ def identify(
     provider_model = getattr(provider, "model", None) or ""
     provider_desc = f"{provider_name}/{provider_model}" if provider_model else provider_name
 
+    n_chunks = len(_representative_segments(stt, speaker_ids))
+
     if pipeline_progress is not None:
-        pipeline_progress.log(f"[7/9] Speaker identification: {provider_desc}")
+        pipeline_progress.log(
+            f"[7/9] Speaker identification: {provider_desc}"
+            f" on {n_chunks} representative chunks"
+        )
 
     ctx = (
         pipeline_progress.stage("speakers")
@@ -85,6 +90,11 @@ def identify(
             speakers=speaker_ids,
             frame_paths=frame_paths,
         )
+        if pipeline_progress is not None:
+            prompt_kb = len(prompt.encode()) / 1024
+            pipeline_progress.log(
+                f"[7/9] Speaker prompt: ~{prompt_kb:.1f} KB, frames: {len(frame_paths)}"
+            )
         response = provider.correct(prompt, frame_paths=frame_paths, timeout=timeout)
         provider_map = _provider_speaker_map(response.raw_json, response.text)
         speaker_map = _finalize(speaker_ids, provider_map | manual_map)
@@ -92,9 +102,11 @@ def identify(
     if pipeline_progress is not None:
         elapsed = _time.monotonic() - t0
         mapping_str = ", ".join(f"{k}→{v}" for k, v in sorted(speaker_map.items()))
-        pipeline_progress.log(
-            f"[7/9] Speakers identified in {elapsed:.1f}s | {mapping_str}"
-        )
+        usage_str = _format_usage(response)
+        log_msg = f"[7/9] Speakers identified in {elapsed:.1f}s | {mapping_str}"
+        if usage_str:
+            log_msg = f"{log_msg} | {usage_str}"
+        pipeline_progress.log(log_msg)
 
     if cache is not None and cache_key is not None:
         cache.set("speakers", cache_key, speaker_map)
@@ -226,6 +238,26 @@ def _provider_speaker_map(raw_json: dict[str, Any], text: str) -> SpeakerMap:
     if not isinstance(speakers, dict):
         return {}
     return _string_dict(speakers)
+
+
+def _format_usage(response: Any) -> str:
+    """Format token/cost info from a ProviderResponse, or return empty string."""
+    try:
+        raw = response.raw_json if hasattr(response, "raw_json") else {}
+        usage = raw.get("usage") or {}
+        input_tok = usage.get("input_tokens") or usage.get("prompt_tokens")
+        output_tok = usage.get("output_tokens") or usage.get("completion_tokens")
+        cost = getattr(response, "cost_estimate", None)
+        parts: list[str] = []
+        if input_tok is not None and output_tok is not None:
+            def _fmt_k(n: int) -> str:
+                return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+            parts.append(f"tokens {_fmt_k(int(input_tok))}+{_fmt_k(int(output_tok))}")
+        if cost is not None:
+            parts.append(f"${float(cost):.2f}")
+        return " | ".join(parts)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _string_dict(value: Mapping[Any, Any]) -> SpeakerMap:
