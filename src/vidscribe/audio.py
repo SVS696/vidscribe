@@ -46,9 +46,10 @@ def extract(
 
     ctx = pipeline_progress.stage("audio") if pipeline_progress is not None else _null_stage()
 
+    t0 = _time.monotonic()
+
     if pipeline_progress is not None:
         pipeline_progress.log(f"[1/9] Audio extraction: {video} → {output}")
-    t0 = _time.monotonic()
 
     with ctx:
         try:

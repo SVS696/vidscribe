@@ -65,7 +65,15 @@ def extract(
         str(output_pattern),
     ]
 
+    import time as _time
+
     ctx = pipeline_progress.stage("frames") if pipeline_progress is not None else _null_stage()
+
+    if pipeline_progress is not None:
+        pipeline_progress.log(
+            f"[5/9] Frames extraction: scene-detect {scene_threshold}, sample every {sample_every:.0f}s"
+        )
+    t0 = _time.monotonic()
 
     with ctx:
         try:
@@ -87,6 +95,11 @@ def extract(
         scene_threshold=scene_threshold,
     )
     _write_frames_json(output_dir / "frames.json", frames)
+
+    if pipeline_progress is not None:
+        elapsed = _time.monotonic() - t0
+        pipeline_progress.log(f"[5/9] Frames done in {elapsed:.1f}s | {len(frames)} frames")
+
     return frames
 
 

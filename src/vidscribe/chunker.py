@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from vidscribe.frames import FrameInfo
 from vidscribe.stt import SttResult, SttSegment
+
+if TYPE_CHECKING:
+    from vidscribe.progress import PipelineProgress
 
 
 ChunkStrategy = Literal["speaker", "time", "scene"]
@@ -32,8 +35,12 @@ def chunk(
     frames: list[FrameInfo],
     strategy: ChunkStrategy,
     window_s: float = 180,
+    *,
+    pipeline_progress: "PipelineProgress | None" = None,
 ) -> list[Chunk]:
     """Split diarized STT into correction chunks."""
+
+    import time as _time
 
     if window_s <= 0:
         raise ValueError("window_s must be greater than 0")
@@ -42,6 +49,10 @@ def chunk(
     ordered_frames = sorted(frames, key=lambda frame: frame.ts)
     if not segments:
         return []
+
+    if pipeline_progress is not None:
+        pipeline_progress.log(f"[6/9] Chunking: {strategy} strategy")
+    t0 = _time.monotonic()
 
     if strategy == "speaker":
         groups = _speaker_groups(segments, window_s)
@@ -52,7 +63,7 @@ def chunk(
     else:
         raise ValueError(f"Unsupported chunk strategy: {strategy}")
 
-    return [
+    result = [
         _build_chunk(
             idx=idx,
             segments=group,
@@ -62,6 +73,20 @@ def chunk(
         for idx, group in enumerate(groups)
         if group
     ]
+
+    if pipeline_progress is not None:
+        elapsed = _time.monotonic() - t0
+        n = len(result)
+        if n > 0:
+            total_dur = sum(c.end - c.start for c in result)
+            avg_s = total_dur / n
+            pipeline_progress.log(
+                f"[6/9] Chunking done in {elapsed:.2f}s | {n} chunks (avg {avg_s:.1f}s each)"
+            )
+        else:
+            pipeline_progress.log(f"[6/9] Chunking done in {elapsed:.2f}s | 0 chunks")
+
+    return result
 
 
 def _speaker_groups(segments: list[SttSegment], window_s: float) -> list[list[SttSegment]]:
