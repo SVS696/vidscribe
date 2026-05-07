@@ -21,6 +21,14 @@ class FrameExtractionError(RuntimeError):
     """Raised when ffmpeg cannot extract video frames."""
 
 
+class FFmpegMissingError(FrameExtractionError):
+    """Raised when the ffmpeg binary itself is unavailable.
+
+    Distinguished from generic FrameExtractionError so the auto-fallback
+    pipeline doesn't pointlessly try other strategies (they all need ffmpeg).
+    """
+
+
 class FrameInfo(BaseModel):
     """A keyframe or sampled frame extracted from the source video."""
 
@@ -38,7 +46,7 @@ _PROGRESS_OTIME_RE = re.compile(r"^out_time_us=(\d+)")
 STUCK_TIMEOUT: float = 120.0  # seconds without out_time_us change before killing ffmpeg
 
 
-FramesStrategy = Literal["auto", "scene-detect", "sample-only"]
+FramesStrategy = Literal["auto", "scene-detect", "sample-only", "seek"]
 
 
 def _build_scene_detect_command(
@@ -111,6 +119,103 @@ def _build_sample_only_command(
     ]
 
 
+def _seek_extract_frames(
+    video: Path,
+    output_dir: Path,
+    total_seconds: float,
+    sample_every: float,
+    *,
+    pipeline_progress: "PipelineProgress | None",
+    per_call_timeout: float = 15.0,
+) -> list["FrameInfo"]:
+    """Per-segment seek-based frame extraction.
+
+    Each frame is a separate ffmpeg invocation with ``-ss T -frames:v 1``.
+    A corrupt segment can fail/timeout one call but other calls keep going.
+    Returns the list of FrameInfo for successfully extracted frames.
+    """
+    if pipeline_progress is not None:
+        pipeline_progress.log(
+            "[5/9] Frames: switching to seek-based extraction (one ffmpeg per frame)"
+        )
+
+    if total_seconds <= 0:
+        return []
+
+    timestamps: list[float] = []
+    t = 0.0
+    while t < total_seconds:
+        timestamps.append(t)
+        t += sample_every
+
+    frames: list[FrameInfo] = []
+    n_failed = 0
+    last_log = _time.monotonic()
+
+    for idx, ts in enumerate(timestamps, start=1):
+        out_path = output_dir / f"frame-{idx:06d}.jpg"
+        command = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{ts:.3f}",
+            "-i",
+            str(video),
+            "-an",
+            "-frames:v",
+            "1",
+            "-q:v",
+            "5",
+            str(out_path),
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=per_call_timeout,
+                check=False,
+            )
+            if result.returncode == 0 and out_path.exists():
+                frames.append(FrameInfo(ts=ts, path=out_path, scene_change=False))
+            else:
+                n_failed += 1
+        except FileNotFoundError as exc:
+            raise FFmpegMissingError(
+                "ffmpeg was not found. Install ffmpeg and make sure it is on PATH."
+            ) from exc
+        except subprocess.TimeoutExpired:
+            n_failed += 1
+
+        if pipeline_progress is not None:
+            now = _time.monotonic()
+            if now - last_log >= 2.0:
+                last_log = now
+                mm, ss = divmod(int(ts), 60)
+                hh, mm = divmod(mm, 60)
+                ts_str = f"{hh}:{mm:02d}:{ss:02d}" if hh else f"{mm}:{ss:02d}"
+                pct = ts / total_seconds * 100 if total_seconds > 0 else 0
+                pipeline_progress.log(
+                    f"[5/9] Frames (seek): {ts_str} processed ({pct:.0f}%)"
+                    f" | {len(frames)} ok | {n_failed} skipped"
+                )
+
+    if pipeline_progress is not None:
+        pipeline_progress.log(
+            f"[5/9] Frames (seek): {len(frames)} extracted, {n_failed} skipped (corrupt segments)"
+        )
+
+    # If seek-based extraction also produced nothing (all frames failed), the
+    # video is unreadable — surface that as an error instead of returning empty.
+    if not frames and n_failed > 0:
+        raise FrameExtractionError(
+            f"seek-based extraction failed for all {n_failed} timestamps; video is likely unreadable"
+        )
+    return frames
+
+
 def _run_ffmpeg_once(
     command: list[str],
     video: Path,
@@ -131,7 +236,7 @@ def _run_ffmpeg_once(
             text=True,
         )
     except FileNotFoundError as exc:
-        raise FrameExtractionError(
+        raise FFmpegMissingError(
             "ffmpeg was not found. Install ffmpeg and make sure it is on PATH."
         ) from exc
 
@@ -215,15 +320,32 @@ def extract(
 
     use_scene_detect = frames_strategy in ("auto", "scene-detect")
     use_fallback = frames_strategy == "auto"
+    seek_only = frames_strategy == "seek"
+
+    fallback_used = False
+    seek_used = False
+    stderr_text = ""
+    seek_frames: list[FrameInfo] | None = None
 
     with ctx:
-        if use_scene_detect:
+        if seek_only:
+            seek_frames = _seek_extract_frames(
+                video,
+                output_dir,
+                total_seconds,
+                sample_every,
+                pipeline_progress=pipeline_progress,
+            )
+            seek_used = True
+        elif use_scene_detect:
             command = _build_scene_detect_command(video, output_pattern, scene_threshold, sample_every)
             try:
                 stderr_text = _run_ffmpeg_once(
                     command, video, output_dir, total_seconds, pipeline_progress, stuck_timeout
                 )
-                fallback_used = False
+            except FFmpegMissingError:
+                # ffmpeg binary itself is unavailable; fallbacks won't help
+                raise
             except FrameExtractionError:
                 if not use_fallback:
                     raise
@@ -239,33 +361,65 @@ def extract(
                     except OSError:
                         pass
                 fallback_cmd = _build_sample_only_command(video, output_pattern, sample_every)
-                stderr_text = _run_ffmpeg_once(
-                    fallback_cmd, video, output_dir, total_seconds, pipeline_progress, stuck_timeout
-                )
-                fallback_used = True
+                try:
+                    stderr_text = _run_ffmpeg_once(
+                        fallback_cmd, video, output_dir, total_seconds, pipeline_progress, stuck_timeout
+                    )
+                    fallback_used = True
+                except FFmpegMissingError:
+                    raise
+                except FrameExtractionError as sample_error:
+                    # Sample-only also stalled — switch to seek-based per-frame extraction.
+                    # If video duration was unknown (e.g. ffprobe failed because the
+                    # input is bad), seek-based has no timestamps to iterate; surface
+                    # the original ffmpeg error instead of silently returning [].
+                    if total_seconds <= 0:
+                        raise sample_error
+                    if pipeline_progress is not None:
+                        pipeline_progress.log(
+                            "[5/9] Frames: sample-only stalled too, switching to seek-based per-frame extraction"
+                        )
+                    for partial in output_dir.glob("frame-*.jpg"):
+                        try:
+                            partial.unlink()
+                        except OSError:
+                            pass
+                    seek_frames = _seek_extract_frames(
+                        video,
+                        output_dir,
+                        total_seconds,
+                        sample_every,
+                        pipeline_progress=pipeline_progress,
+                    )
+                    seek_used = True
         else:
             # sample-only, no scene-detect
             command = _build_sample_only_command(video, output_pattern, sample_every)
             stderr_text = _run_ffmpeg_once(
                 command, video, output_dir, total_seconds, pipeline_progress, stuck_timeout
             )
-            fallback_used = False
 
-    frames = _frames_from_ffmpeg_log(
-        stderr_text,
-        output_dir=output_dir,
-        # In sample-only mode scene_score will be absent, treat all as non-scene-change
-        scene_threshold=scene_threshold,
-    )
+    if seek_used:
+        frames: list[FrameInfo] = seek_frames or []
+    else:
+        frames = _frames_from_ffmpeg_log(
+            stderr_text,
+            output_dir=output_dir,
+            scene_threshold=scene_threshold,
+        )
     _write_frames_json(output_dir / "frames.json", frames)
 
     if pipeline_progress is not None:
         elapsed = _time.monotonic() - t0
-        if fallback_used:
+        if seek_used:
+            pipeline_progress.log(
+                f"[5/9] Frames done in {elapsed:.1f}s"
+                f" | {len(frames)} frames (seek-based per-frame fallback)"
+            )
+        elif fallback_used:
             pipeline_progress.log(
                 f"[5/9] Frames done in {elapsed:.1f}s"
                 f" | {len(frames)} frames (sample-only fallback)"
-                f" | elapsed {elapsed:.1f}s"
             )
         else:
             n_scene = sum(1 for f in frames if f.scene_change)
