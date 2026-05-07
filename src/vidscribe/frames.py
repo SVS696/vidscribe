@@ -92,6 +92,11 @@ def _build_sample_only_command(
         "ignore_err",
         "-fflags",
         "+discardcorrupt+genpts",
+        # Decode only I-frames (keyframes). 5-50x faster, and skips broken
+        # P/B frames that can stall decoding on partly-corrupt recordings.
+        # For meetings/screencasts keyframes are dense enough for sampling.
+        "-skip_frame",
+        "nokey",
         "-i",
         str(video),
         "-an",  # ignore audio: not needed for frames, avoids demuxer/audio-sync stalls
